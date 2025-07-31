@@ -1,0 +1,10 @@
+# Ignore sensitive files and local env
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+node_modules/
+streamlit/
+.env

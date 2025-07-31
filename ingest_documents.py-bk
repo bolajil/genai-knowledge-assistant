@@ -1,0 +1,35 @@
+"""
+Pipeline to ingest PDF → Chunk → Embed → Save FAISS vector store.
+Compatible with LangChain 0.1.16 and langchain_community deprecations.
+"""
+
+from pathlib import Path
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+
+# === Config ===
+PDF_DIR = Path("data/")
+PDF_FILES = list(PDF_DIR.glob("*.pdf"))
+VECTOR_DIR = Path("data/faiss_index/")
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 50
+EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+def ingest_pdf():
+    loader = PyPDFLoader(str(PDF_PATH))
+    docs = loader.load()
+    print(f"[INFO] Loaded {len(docs)} pages")
+
+    splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+    chunks = splitter.split_documents(docs)
+    print(f"[INFO] Split into {len(chunks)} chunks")
+
+    embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
+    db = FAISS.from_documents(chunks, embeddings)
+    db.save_local(str(VECTOR_DIR))
+    print(f"[SUCCESS] Saved vector index to: {VECTOR_DIR}")
+
+if __name__ == "__main__":
+    ingest_pdf()
