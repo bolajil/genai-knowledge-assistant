@@ -1,6 +1,24 @@
 # Add at the VERY TOP of your file
-from dotenv import load_dotenv
 import os
+import re
+import sys
+import pydantic
+from pathlib import Path
+import streamlit as st
+import requests
+import logging
+from typing import List, Dict
+from dotenv import load_dotenv
+import importlib.util
+import torch  # Added for device management
+
+# Calculate absolute path to project root
+PROJECT_ROOT = Path(__file__).resolve().parent
+print(f"Project root: {PROJECT_ROOT}")
+
+# Add project root to Python path
+sys.path.insert(0, str(PROJECT_ROOT))
+print(f"Python path: {sys.path}")
 
 # Load environment variables from .env file
 load_dotenv()
@@ -8,32 +26,71 @@ load_dotenv()
 if not os.getenv("OPENAI_API_KEY"):
     raise EnvironmentError("OPENAI_API_KEY not found in .env file")
 
-
-import sys
-import pydantic
-from pathlib import Path
-import streamlit as st
-from utils.query_helpers import query_index
-from utils.chat_orchestrator import get_chat_chain
-import requests
+# Now import other modules
 import logging
-from typing import List, Dict
-
-# Add these imports are for Webscapping document ingestion
-from langchain_community.document_loaders import WebBaseLoader
+from typing import List, Any, Dict
 from newspaper import Article
 from requests_html import HTMLSession
+from langchain_community.document_loaders import WebBaseLoader, PyPDFLoader, TextLoader
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
-
-# LangChain + Vector DB
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader
-from orchestrator.chat_orchestrator import get_chat_chain
-from agents.controller_agent import choose_provider
+
+# Function to load modules by path with error handling
+def load_module(module_name, file_path):
+    try:
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
+        if spec is None:
+            raise ImportError(f"Could not create spec for {module_name} at {file_path}")
+        
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception as e:
+        print(f"❌ Failed to load module {module_name}: {e}")
+        raise
+
+# Load custom modules
+try:
+    # Import query_helpers
+    query_helpers = load_module(
+        "app.utils.query_helpers",
+        PROJECT_ROOT / "app" / "utils" / "query_helpers.py"
+    )
+    query_index = query_helpers.query_index
+    print("✅ Loaded query_helpers")
+
+    # Import chat_orchestrator
+    chat_orchestrator = load_module(
+        "app.utils.chat_orchestrator",
+        PROJECT_ROOT / "app" / "utils" / "chat_orchestrator.py"
+    )
+    get_chat_chain = chat_orchestrator.get_chat_chain
+    print("✅ Loaded chat_orchestrator")
+
+    # Import controller_agent
+    controller_agent = load_module(
+        "app.agents.controller_agent",
+        PROJECT_ROOT / "app" / "agents" / "controller_agent.py"
+    )
+    choose_provider = controller_agent.choose_provider
+    print("✅ Loaded controller_agent")
+
+    # Import list_indexes from index_utils
+    index_utils = load_module(
+        "app.utils.index_utils",
+        PROJECT_ROOT / "app" / "utils" / "index_utils.py"
+    )
+    list_indexes = index_utils.list_indexes
+    print("✅ Loaded index_utils")
+
+except Exception as e:
+    print(f"❌ Critical module loading failed: {e}")
+    st.error(f"CRITICAL ERROR: Failed to load required modules. Check logs for details.")
+    sys.exit(1)
 
 # Constants
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -47,7 +104,85 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# Enhanced Web Scraper Class
+# ========================
+# MULTI-CONTENT PROCESSING
+# ========================
+class ContentProcessor:
+    """Handles processing of multiple content types"""
+    def __init__(self):
+        self.scraper = WebScraper()
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=800, chunk_overlap=100
+        )
+        # FIXED: Explicitly set device to CPU and disable auto device mapping
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name=EMBED_MODEL,
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'device': 'cpu', 'show_progress_bar': False}
+        )
+
+    def process_pdf(self, file_path: Path) -> List[Document]:
+        """Process PDF files"""
+        loader = PyPDFLoader(str(file_path))
+        return loader.load_and_split()
+
+    def process_web(self, url: str, render_js: bool, max_depth: int) -> List[Document]:
+        """Process web content with multi-page scraping"""
+        documents = []
+        urls_to_scrape = [url]
+
+        # Handle multi-page scraping
+        if max_depth > 0:
+            try:
+                response = self.scraper.session.get(url)
+                links = response.html.absolute_links
+                urls_to_scrape.extend(list(links)[:max_depth])
+            except Exception as e:
+                logger.warning(f"Couldn't find related links: {str(e)}")
+
+        # Scrape all URLs
+        for url in urls_to_scrape:
+            try:
+                doc = self.scraper.scrape_to_document(url, render_js)
+                if doc.page_content.strip():
+                    documents.append(doc)
+            except Exception as e:
+                logger.error(f"Scrape failed for {url}: {str(e)}")
+
+        return documents
+
+    def process_text(self, file_path: Path) -> List[Document]:
+        """Process plain text files"""
+        loader = TextLoader(str(file_path))
+        return loader.load()
+
+    def process_documents(
+        self,
+        documents: List[Document],
+        chunk_size: int,
+        chunk_overlap: int,
+        semantic_chunking: bool
+    ) -> List[Document]:
+        """Split documents into chunks"""
+        if semantic_chunking:
+            semantic_splitter = SemanticChunker(self.embeddings)
+            return semantic_splitter.split_documents(documents)
+        else:
+            self.text_splitter.chunk_size = chunk_size
+            self.text_splitter.chunk_overlap = chunk_overlap
+            return self.text_splitter.split_documents(documents)
+
+    def create_index(self, chunks: List[Document], index_name: str) -> FAISS:
+        """Create FAISS index from document chunks"""
+        db = FAISS.from_documents(chunks, self.embeddings)
+        index_dir = INDEX_ROOT / index_name
+        db.save_local(str(index_dir))
+        return db
+
+
+# =================
+# WEB SCRAPER CLASS
+# =================
 class WebScraper:
     def __init__(self):
         self.session = HTMLSession()
@@ -56,12 +191,10 @@ class WebScraper:
         """Scrape web content with optional JavaScript rendering"""
         try:
             if render_js:
-                # For JavaScript-heavy sites
                 response = self.session.get(url)
                 response.html.render(timeout=20)
                 return response.html.text
             else:
-                # For standard articles
                 article = Article(url)
                 article.download()
                 article.parse()
@@ -70,41 +203,40 @@ class WebScraper:
             logger.error(f"Scraping failed for {url}: {str(e)}")
             return ""
 
-    def scrape_to_document(self, url: str) -> Document:
+    def scrape_to_document(self, url: str, render_js: bool = False) -> Document:
         """Convert scraped content to Document format"""
-        content = self.scrape_url(url)
+        content = self.scrape_url(url, render_js)
         return Document(page_content=content, metadata={"source": url, "type": "web"})
 
     def search_web(self, query: str, max_results: int = 3) -> List[str]:
         """Get search results from search engines"""
         try:
-            # First try DuckDuckGo
+            # DuckDuckGo search
             from duckduckgo_search import DDGS
-
             with DDGS() as ddgs:
-                results = [r["href"] for r in ddgs.text(query, max_results=max_results)]
-                return results
+                return [r["href"] for r in ddgs.text(query, max_results=max_results)]
         except ImportError:
-            # Fallback to Google if DuckDuckGo not available
+            # Fallback to Google
             return self.google_search(query, max_results)
+        except Exception as e:
+            logger.error(f"Search failed: {str(e)}")
+            return []
 
     def google_search(self, query: str, max_results: int) -> List[str]:
         """Fallback to Google search"""
         try:
             from googlesearch import search
-
             return [url for url in search(query, num_results=max_results)]
         except ImportError:
-            logger.error(
-                "Web search requires either duckduckgo-search or google-search-packages"
-            )
+            logger.error("Google search requires google-search-packages")
             return []
 
 
-# Notification Service Class
+# ==========================
+# NOTIFICATION SERVICE CLASS
+# ==========================
 class NotificationService:
     def __init__(self):
-        # Set these in your environment variables
         self.flowise_url = os.getenv("FLOWISE_URL", "http://localhost:3000/api/v1/flow")
         self.flowise_api_key = os.getenv("FLOWISE_API_KEY")
         self.n8n_url = os.getenv("N8N_URL", "http://localhost:5678/webhook")
@@ -112,7 +244,7 @@ class NotificationService:
 
     def validate_email(self, email: str) -> bool:
         """Simple email validation"""
-        return bool(re.match(r"[^@]+@[^@]+\.[^@]+", email))
+        return bool(re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", email))
 
     def send_via_flowise(
         self, content: str, recipients: List[str], channels: List[str]
@@ -188,10 +320,14 @@ class NotificationService:
         return "No notification service selected"
 
 
-# Initialize notification service
+# Initialize services
+content_processor = ContentProcessor()
 notification_service = NotificationService()
+web_scraper = WebScraper()
 
-# Page Config
+# =====================
+# STREAMLIT UI SETUP
+# =====================
 st.set_page_config(
     page_title="GenAI Knowledge Assistant", page_icon="🧠", layout="wide"
 )
@@ -199,12 +335,13 @@ st.title("🧠 GenAI Knowledge Assistant")
 st.markdown("Upload documents, ask questions, or have a chat powered by multiple LLMs.")
 
 # Tab Layout
-tab1, tab2, tab3, tab4 = st.tabs(
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
     [
         "📁 Ingest Document",
         "🔍 Query Assistant",
         "💬 Chat Assistant",
         "🤖 Agent Assistant",
+        "🔄 MCP Dashboard"
     ]
 )
 
@@ -213,32 +350,32 @@ llm_providers = [
     "openai",
     "claude",
     "deepseek",
-    "deepseek-chat",
     "mistral",
     "anthropic",
 ]
 
-
-# Utility: list indexes
+# Utility: get list of indexes using our imported function
 def get_index_list():
-    return (
-        [f.name for f in INDEX_ROOT.iterdir() if f.is_dir()]
-        if INDEX_ROOT.exists()
-        else []
-    )
+    return list_indexes(INDEX_ROOT) if INDEX_ROOT.exists() else []
 
 
-# TAB 1: Ingest Document
+# ===========================
+# TAB 1: DOCUMENT INGESTION
+# ===========================
 with tab1:
     st.subheader("📁 Upload and Index Content")
 
     # Content source selection
     source_type = st.radio(
-        "Select content source:", ["📄 PDF File", "🌐 Website URL"], horizontal=True
+        "Select content source:",
+        ["📄 PDF File", "📝 Text File", "🌐 Website URL"],
+        horizontal=True
     )
 
     if source_type == "📄 PDF File":
         uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
+    elif source_type == "📝 Text File":
+        uploaded_file = st.file_uploader("Choose a text file", type=["txt"])
     else:
         url_input = st.text_input(
             "Enter website URL:", placeholder="https://example.com/article"
@@ -266,98 +403,72 @@ with tab1:
 
         try:
             documents = []
-            scraper = WebScraper()
+            source_info = ""
 
-            if source_type == "📄 PDF File":
+            # Handle different content types
+            if source_type in ["📄 PDF File", "📝 Text File"]:
                 if not uploaded_file:
-                    st.warning("Please upload a PDF file.")
+                    st.warning(f"Please upload a {source_type.split()[1]} file.")
                     st.stop()
 
                 save_path = UPLOAD_DIR / uploaded_file.name
                 with open(save_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
 
-                loader = PyPDFLoader(str(save_path))
-                documents = loader.load_and_split()
-                st.write(f"📄 Loaded {len(documents)} PDF documents")
+                if source_type == "📄 PDF File":
+                    documents = content_processor.process_pdf(save_path)
+                    source_info = f"📄 Loaded {len(documents)} PDF documents"
+                else:
+                    documents = content_processor.process_text(save_path)
+                    source_info = f"📝 Loaded {len(documents)} text documents"
 
             else:  # Website URL
                 if not url_input:
                     st.warning("Please enter a website URL.")
                     st.stop()
 
-                # Handle multi-page scraping
-                urls_to_scrape = [url_input]
-                if max_depth > 0:
-                    try:
-                        # Find related links
-                        response = scraper.session.get(url_input)
-                        links = response.html.absolute_links
-                        urls_to_scrape.extend(list(links)[:max_depth])
-                    except Exception as e:
-                        st.warning(f"Couldn't find related links: {str(e)[:100]}")
-
-                with st.status(
-                    f"🌐 Scraping {len(urls_to_scrape)} pages...", expanded=True
-                ) as status:
-                    for i, url in enumerate(urls_to_scrape):
-                        st.write(f"Scraping: {url}")
-                        try:
-                            doc = scraper.scrape_to_document(url)
-                            if doc.page_content.strip():
-                                documents.append(doc)
-                                st.success(
-                                    f"Scraped {len(doc.page_content)} characters"
-                                )
-                            else:
-                                st.warning("No content found")
-                        except Exception as e:
-                            st.error(f"Scrape failed: {str(e)[:100]}")
-                        st.progress((i + 1) / len(urls_to_scrape))
-                    status.update(
-                        label=f"✅ Scraped {len(documents)} documents", state="complete"
-                    )
+                documents = content_processor.process_web(
+                    url_input, render_js, max_depth
+                )
+                source_info = f"🌐 Scraped {len(documents)} web documents"
 
             if not documents:
                 st.error("🚫 No content found - try different source or parameters")
                 st.stop()
 
-            # Enhanced text splitting
-            if semantic_chunking:
-                embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
-                text_splitter = SemanticChunker(embeddings)
-                chunks = text_splitter.split_documents(documents)
-            else:
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=chunk_size, chunk_overlap=chunk_overlap
-                )
-                chunks = text_splitter.split_documents(documents)
+            st.write(source_info)
 
+            # Process and chunk documents
+            chunks = content_processor.process_documents(
+                documents,
+                chunk_size,
+                chunk_overlap,
+                semantic_chunking
+            )
             st.write(f"🧩 Generated {len(chunks)} chunks")
 
-            # Indexing
-            embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
-            db = FAISS.from_documents(chunks, embeddings)
-            index_dir = INDEX_ROOT / index_name
-            db.save_local(str(index_dir))
-
-            st.success(f"✅ Indexed and saved to `{index_dir}`")
+            # Create and save index
+            content_processor.create_index(chunks, index_name)
+            st.success(f"✅ Indexed and saved to `{index_name}`")
             st.balloons()
 
             # Show preview
             with st.expander("📝 Content Preview"):
                 if chunks:
-                    st.write(
-                        chunks[0].page_content[:1000]
-                        + ("..." if len(chunks[0].page_content) > 1000 else "")
-                    )
+                    preview = chunks[0].page_content
+                    if len(preview) > 1000:
+                        preview = preview[:1000] + "..."
+                    st.write(preview)
                 else:
                     st.info("No content to preview")
 
         except Exception as e:
             st.error(f"❌ Ingestion failed: {type(e).__name__} — {str(e)[:200]}")
 
-# TAB 2: Query Assistant
+
+# ==========================
+# TAB 2: QUERY ASSISTANT
+# ==========================
 with tab2:
     st.subheader("🔍 Query Assistant")
     index_options = get_index_list()
@@ -392,9 +503,8 @@ with tab2:
             if search_mode == "🔍 Local Index":
                 results = query_index(query, index_name, top_k)
             else:
-                scraper = WebScraper()
                 search_query = web_query or query
-                search_results = scraper.search_web(search_query, max_results)
+                search_results = web_scraper.search_web(search_query, max_results)
 
                 if not search_results:
                     st.warning("No web results found. Try a different query.")
@@ -407,7 +517,7 @@ with tab2:
                     for i, url in enumerate(search_results):
                         st.write(f"Scraping: {url}")
                         try:
-                            doc = scraper.scrape_to_document(url)
+                            doc = web_scraper.scrape_to_document(url)
                             if doc.page_content.strip():
                                 documents.append(doc)
                                 st.success(
@@ -445,33 +555,9 @@ with tab2:
             st.error(f"❌ Query failed: {type(e).__name__} — {str(e)[:200]}")
 
 
-# Add web search method to WebScraper class
-class WebScraper:
-    # ... existing methods ...
-
-    def search_web(self, query: str, max_results: int = 3) -> List[str]:
-        """Get search results from DuckDuckGo"""
-        try:
-            from duckduckgo_search import DDGS
-
-            with DDGS() as ddgs:
-                results = [r["href"] for r in ddgs.text(query, max_results=max_results)]
-                return results
-        except:
-            # Fallback to Google
-            return self.google_search(query, max_results)
-
-    def google_search(self, query: str, max_results: int) -> List[str]:
-        """Fallback to Google search"""
-        import googlesearch_python
-
-        return [
-            result.url
-            for result in googlesearch_python.search(query, num_results=max_results)
-        ]
-
-
-# TAB 3: Chat Assistant - Fixed with proper notification placement
+# ==========================
+# TAB 3: CHAT ASSISTANT
+# ==========================
 with tab3:
     st.subheader("💬 Chat with Your Documents")
     index_options = get_index_list()
@@ -483,7 +569,6 @@ with tab3:
         st.session_state.current_query = ""
     if "current_response" not in st.session_state:
         st.session_state.current_response = ""
-    # Add notification state flag
     if "notification_shown" not in st.session_state:
         st.session_state.notification_shown = False
 
@@ -527,37 +612,24 @@ with tab3:
         if send_button and user_input:
             st.session_state.current_query = user_input
             st.session_state.current_response = ""
-            st.session_state.notification_shown = False  # Reset for new response
+            st.session_state.notification_shown = False
 
             try:
-                # Add API key verification
-                if provider == "openai":
-                    openai_key = os.getenv("OPENAI_API_KEY")
-                    if not openai_key:
-                        st.error(
-                            "❌ OpenAI API key not configured! Add OPENAI_API_KEY to your .env file"
-                        )
-                        st.stop()
+                # API key verification
+                if provider == "openai" and not os.getenv("OPENAI_API_KEY"):
+                    st.error("❌ OpenAI API key not configured!")
+                    st.stop()
+                if provider == "anthropic" and not os.getenv("ANTHROPIC_API_KEY"):
+                    st.error("❌ Anthropic API key not configured!")
+                    st.stop()
 
-                if provider == "anthropic":
-                    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-                    if not anthropic_key:
-                        st.error(
-                            "❌ Anthropic API key not configured! Add ANTHROPIC_API_KEY to your .env file"
-                        )
-                        st.stop()
-
-                # Create the chain
+                # Create and execute chat chain
                 with st.spinner("Generating response..."):
                     chain = get_chat_chain(provider=provider, index_name=index_name)
-
-                    # Get response
                     response = chain.invoke({"input": user_input})
 
-                    # Handle different response types
-                    if hasattr(
-                        response, "content"
-                    ):  # For ChatOpenAI/ChatMistralAI responses
+                    # Handle different response formats
+                    if hasattr(response, "content"):  # For ChatOpenAI/ChatMistralAI
                         answer = response.content
                     elif isinstance(response, dict) and "answer" in response:
                         answer = response["answer"]
@@ -568,7 +640,7 @@ with tab3:
 
                     st.session_state.current_response = answer
 
-                    # Add completed conversation to history
+                    # Add to history
                     st.session_state.chat_history.append(
                         {
                             "user": st.session_state.current_query,
@@ -580,11 +652,9 @@ with tab3:
                 error_msg = f"❌ Chat failed: {type(e).__name__} — {str(e)[:200]}"
                 if "Unauthorized" in str(e) or "401" in str(e):
                     error_msg += "\n🔑 Check your API key in the .env file"
-                elif "api_key" in str(e).lower():
-                    error_msg += "\n🔑 API key might be missing or invalid"
                 st.error(error_msg)
 
-        # Display current conversation with notification options
+        # Display current conversation
         if st.session_state.current_query:
             with st.container():
                 st.markdown("### Current Conversation")
@@ -595,8 +665,7 @@ with tab3:
                         f"**🤖 Assistant:** {st.session_state.current_response}"
                     )
 
-                    # NOTIFICATION SECTION - INSIDE CURRENT CONVERSATION
-                    # Only show once per response
+                    # Notification section
                     if not st.session_state.notification_shown:
                         st.session_state.notification_shown = True
 
@@ -619,7 +688,7 @@ with tab3:
                                 invalid_emails = []
 
                                 for email in email_list:
-                                    if re.match(r"[^@]+@[^@]+\.[^@]+", email):
+                                    if notification_service.validate_email(email):
                                         valid_emails.append(email)
                                     else:
                                         invalid_emails.append(email)
@@ -628,25 +697,15 @@ with tab3:
                                     st.error(
                                         f"Invalid emails: {', '.join(invalid_emails)}"
                                     )
-                                elif not valid_emails:
+                                if not valid_emails:
                                     st.warning("Please enter at least one valid email")
                                 else:
-                                    # Send request to backend
-                                    response = requests.post(
-                                        "http://localhost:5000/api/email/send",
-                                        json={
-                                            "recipients": valid_emails,
-                                            "subject": "Chat Assistant Report",
-                                            "content": st.session_state.current_response,
-                                        },
+                                    result = notification_service.send_via_n8n(
+                                        content=st.session_state.current_response,
+                                        recipients=valid_emails,
+                                        channels=["Email"]
                                     )
-
-                                    if response.status_code == 200:
-                                        st.success("Email sent successfully!")
-                                    else:
-                                        st.error(
-                                            f"Failed to send email: {response.text}"
-                                        )
+                                    st.success(result)
                             except Exception as e:
                                 st.error(f"Email sending error: {str(e)}")
                 else:
@@ -655,48 +714,34 @@ with tab3:
         # Display conversation history
         if st.session_state.chat_history:
             st.markdown("### 💬 Conversation History")
-            # Only show previous exchanges, not the current one
             for i, exchange in enumerate(st.session_state.chat_history[:-1]):
                 st.markdown(f"**👤 User:** {exchange['user']}")
                 st.markdown(f"**🤖 Assistant:** {exchange['assistant']}")
                 st.divider()
 
 
-# TAB 4: AI Agent with Notification
-import streamlit as st
-from pathlib import Path
-
-# ... (other imports and functions)
-
+# ==========================
+# TAB 4: AGENT ASSISTANT
+# ==========================
 with tab4:
     st.header("🤖 Agent Assistant")
+    index_options = get_index_list()
 
-    # 📁 Document index handling
-    INDEX_ROOT = Path("data/faiss_index")
-    INDEX_ROOT.mkdir(parents=True, exist_ok=True)
-
-    index_list = [
-        folder.name
-        for folder in INDEX_ROOT.iterdir()
-        if folder.is_dir() and (folder / "index.pkl").exists()
-    ]
-
-    if not index_list:
-        st.warning("⚠️ No indexes found. Please ingest a PDF first.")
+    if not index_options:
+        st.warning("⚠️ No indexes found. Please ingest a document first.")
         st.stop()
 
-    # 💬 Agent interaction
+    # Document selection
     index_name = st.selectbox(
-        "📂 Choose indexed document", index_list, key="agent_index"
+        "📂 Choose indexed document", index_options, key="agent_index"
     )
-    # Initialize user_prompt to prevent NameError
+
+    # Agent interaction
     user_prompt = st.text_area("💬 Enter your question:", key="agent_prompt", value="")
     use_trace = st.checkbox("🧠 Show agent trace", key="agent_trace")
 
-    # 🔔 NOTIFICATION SETTINGS
+    # Notification settings
     with st.expander("🔔 Notification Options", expanded=False):
-        st.markdown("<h4>Notification Settings</h4>", unsafe_allow_html=True)
-
         notification_service_choice = st.radio(
             "Notification Service:",
             ["None", "Flowise (AI-powered)", "n8n (Direct)"],
@@ -719,7 +764,6 @@ with tab4:
         )
 
     if st.button("🤖 Run Agent"):
-        # Use the session_state version to ensure it exists
         prompt_text = st.session_state.get("agent_prompt", "")
 
         if not prompt_text.strip():
@@ -727,9 +771,10 @@ with tab4:
             st.stop()
 
         try:
+            # Select provider and create chain
             provider = choose_provider(prompt_text, index_name)
             chain = get_chat_chain(provider=provider, index_name=index_name)
-            response = chain.invoke({"query": prompt_text})
+            response = chain.invoke({"input": prompt_text})
 
             # Handle response
             if isinstance(response, dict):
@@ -739,25 +784,23 @@ with tab4:
                 answer = str(response)
                 source_docs = []
 
-            # 🟢 SOURCE INDICATOR
+            # Source indicator
             if source_docs:
                 source_indicator = (
-                    "<div style='margin-bottom: 10px;'>"
-                    "📄 <b>Document-based answer</b> - This response was generated using information from the uploaded document(s)"
-                    "</div>"
+                    "📄 **Document-based answer** - "
+                    "Generated using information from uploaded documents"
                 )
             else:
                 source_indicator = (
-                    "<div style='margin-bottom: 10px;'>"
-                    "🧠 <b>General knowledge answer</b> - This response was generated using the agent's built-in knowledge"
-                    "</div>"
+                    "🧠 **General knowledge answer** - "
+                    "Generated using the agent's built-in knowledge"
                 )
 
-            st.markdown(source_indicator, unsafe_allow_html=True)
+            st.info(source_indicator)
             st.markdown("### 🧠 Agent Response")
             st.write(answer)
 
-            # 🔔 NOTIFICATION HANDLING
+            # Notification handling
             if notification_service_choice != "None":
                 service_type = (
                     "flowise" if "Flowise" in notification_service_choice else "n8n"
@@ -789,23 +832,207 @@ with tab4:
                 if source_docs:
                     st.markdown(f"#### 📄 Source Documents ({len(source_docs)} found)")
                     for i, doc in enumerate(source_docs, 1):
-                        # Clean and extract metadata
                         clean_content = doc.page_content.replace("```", "").strip()
                         source = doc.metadata.get("source", "Unknown document")
                         page = doc.metadata.get("page", "N/A")
 
-                        # Display chunk info
                         with st.expander(
                             f"🔹 Chunk {i} (Source: {source}, Page: {page})"
                         ):
-                            st.code(clean_content[:1000])  # Show more content
+                            st.code(clean_content[:1000])
                 else:
                     st.info(
-                        "No source documents retrieved. This means:"
-                        "\n- The answer came from the agent's built-in knowledge"
-                        "\n- No documents matched your specific query"
-                        "\n- The document index doesn't contain relevant information"
+                        "No source documents retrieved. This means:\n"
+                        "- The answer came from the agent's built-in knowledge\n"
+                        "- No documents matched your specific query\n"
+                        "- The document index doesn't contain relevant information"
                     )
 
         except Exception as e:
             st.error(f"🚫 Agent execution failed: {type(e).__name__} — {str(e)[:200]}")
+
+
+# ===========================
+# TAB 5: MCP DASHBOARD
+# ===========================
+with tab5:
+    st.header("🔄 Multi-Content Processing Dashboard")
+    st.markdown("Manage and analyze your indexed content repositories")
+    
+    # Show all available indexes
+    index_options = get_index_list()
+    if not index_options:
+        st.warning("No indexes available. Please ingest documents first.")
+    else:
+        st.subheader("📚 Content Repositories")
+        
+        # Create columns for layout
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            # Index selection
+            selected_index = st.selectbox(
+                "Select an index to analyze", 
+                index_options,
+                key="mcp_index_select"
+            )
+            
+            # Action buttons
+            if st.button("🔍 Analyze Index", key="mcp_analyze_btn"):
+                st.session_state.mcp_action = "analyze"
+                
+            if st.button("🗑️ Delete Index", key="mcp_delete_btn"):
+                st.session_state.mcp_action = "delete"
+        
+        with col2:
+            # Display index details
+            if "mcp_action" in st.session_state:
+                index_dir = INDEX_ROOT / selected_index
+                
+                if st.session_state.mcp_action == "analyze":
+                    try:
+                        # Count files in index directory
+                        file_count = len(list(index_dir.glob("*")))
+                        size_mb = sum(f.stat().st_size for f in index_dir.glob('*') if f.is_file()) / (1024 * 1024)
+                        
+                        st.success(f"✅ Index Analysis Complete")
+                        st.write(f"**Index Name:** `{selected_index}`")
+                        st.write(f"**Location:** `{index_dir}`")
+                        st.write(f"**Files:** {file_count}")
+                        st.write(f"**Size:** {size_mb:.2f} MB")
+                        
+                        # Show sample files
+                        sample_files = [f.name for f in index_dir.iterdir() if f.is_file()][:3]
+                        with st.expander("📝 Sample Files"):
+                            for file in sample_files:
+                                st.write(f"- {file}")
+                        
+                    except Exception as e:
+                        st.error(f"Analysis failed: {str(e)}")
+                
+                elif st.session_state.mcp_action == "delete":
+                    st.warning(f"Are you sure you want to delete index `{selected_index}`?")
+                    
+                    if st.button("⚠️ Confirm Permanent Deletion"):
+                        try:
+                            # Delete index directory
+                            import shutil
+                            shutil.rmtree(index_dir)
+                            st.success(f"Index `{selected_index}` deleted successfully")
+                            st.session_state.mcp_action = None
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Deletion failed: {str(e)}")
+    
+    # Batch processing section
+    st.divider()
+    st.subheader("🔁 Batch Processing")
+    
+    # File uploader for multiple files
+    uploaded_files = st.file_uploader(
+        "Upload multiple files for batch processing", 
+        type=["pdf", "txt"],
+        accept_multiple_files=True
+    )
+    
+    batch_index_name = st.text_input(
+        "Batch index name", 
+        placeholder="e.g. batch_documents_index"
+    )
+    
+    if st.button("🚀 Process Batch", key="mcp_batch_btn") and uploaded_files:
+        if not batch_index_name:
+            st.warning("Please specify a batch index name.")
+            st.stop()
+            
+        with st.status("Processing batch...", expanded=True) as status:
+            all_documents = []
+            
+            # Process each file
+            for i, uploaded_file in enumerate(uploaded_files):
+                st.write(f"Processing {uploaded_file.name} ({i+1}/{len(uploaded_files)})")
+                
+                try:
+                    # Save file
+                    save_path = UPLOAD_DIR / uploaded_file.name
+                    with open(save_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    
+                    # Process based on file type
+                    if uploaded_file.name.lower().endswith(".pdf"):
+                        docs = content_processor.process_pdf(save_path)
+                    else:  # Assume text file
+                        docs = content_processor.process_text(save_path)
+                    
+                    all_documents.extend(docs)
+                    st.success(f"Processed {len(docs)} documents")
+                except Exception as e:
+                    st.error(f"Failed to process {uploaded_file.name}: {str(e)}")
+                
+                st.progress((i + 1) / len(uploaded_files))
+            
+            if not all_documents:
+                st.error("No documents processed successfully")
+                st.stop()
+                
+            # Process and index documents
+            st.write("Chunking documents...")
+            chunks = content_processor.process_documents(
+                all_documents,
+                chunk_size=800,
+                chunk_overlap=100,
+                semantic_chunking=False
+            )
+            
+            st.write(f"Creating index '{batch_index_name}' with {len(chunks)} chunks...")
+            content_processor.create_index(chunks, batch_index_name)
+            
+            status.update(
+                label=f"✅ Batch processing complete! Indexed {len(uploaded_files)} files to '{batch_index_name}'", 
+                state="complete"
+            )
+            st.balloons()
+            
+    # Index combination section
+    st.divider()
+    st.subheader("🧩 Combine Indexes")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        index1 = st.selectbox("First index", index_options, key="mcp_index1")
+    with col2:
+        index2 = st.selectbox("Second index", index_options, key="mcp_index2")
+    with col3:
+        combined_name = st.text_input("Combined index name", placeholder="e.g. combined_index")
+    
+    if st.button("⚡ Combine Indexes", key="mcp_combine_btn") and index1 and index2 and combined_name:
+        try:
+            with st.status("Combining indexes...", expanded=True):
+                # Load first index
+                st.write(f"Loading index '{index1}'...")
+                db1 = FAISS.load_local(
+                    str(INDEX_ROOT / index1), 
+                    content_processor.embeddings,
+                    allow_dangerous_deserialization=True
+                )
+                
+                # Load second index
+                st.write(f"Loading index '{index2}'...")
+                db2 = FAISS.load_local(
+                    str(INDEX_ROOT / index2), 
+                    content_processor.embeddings,
+                    allow_dangerous_deserialization=True
+                )
+                
+                # Merge indexes
+                st.write("Merging indexes...")
+                db1.merge_from(db2)
+                
+                # Save combined index
+                combined_dir = INDEX_ROOT / combined_name
+                db1.save_local(str(combined_dir))
+                
+                st.success(f"✅ Combined indexes saved to '{combined_name}'")
+                st.balloons()
+        except Exception as e:
+            st.error(f"Index combination failed: {str(e)}")

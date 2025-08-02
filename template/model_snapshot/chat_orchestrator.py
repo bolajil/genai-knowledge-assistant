@@ -10,7 +10,7 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
 from langchain.chains import RetrievalQA
 from langchain_community.vectorstores import FAISS
-from utils.index_utils import load_index  # Or your existing loader
+from app.utils.index_utils import load_index  # Or your existing loader
 from langchain_core.runnables import RunnableMap
 #from query_helpers import load_index
 from langchain_core.documents import Document
@@ -25,7 +25,7 @@ def get_llm(provider: str) -> BaseChatModel:
 
     if provider == "openai":
         return ChatOpenAI(
-            model="gpt-3.5-turbo",
+            model="gpt-4-turbo",
             temperature=temperature,
             api_key=os.getenv("OPENAI_API_KEY")
         )

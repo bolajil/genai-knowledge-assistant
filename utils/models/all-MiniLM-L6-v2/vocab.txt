@@ -1,7 +1,0 @@
-Temporary Redirect. Redirecting to /api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/c9745ed1d9f207416be6d2e6f8de32d1f16199bf/vocab.txt?%2Fsentence-transformers%2Fall-MiniLM-L6-v2%2Fresolve%2Fmain%2Fvocab.txt=&etag=%22fb140275c155a9c7c5a3b3e0e77a9e839594a938%22
-[PAD]
-[UNK]
-[CLS]
-[SEP]
-[MASK]
-...

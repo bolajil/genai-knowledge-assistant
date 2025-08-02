@@ -1,39 +1,81 @@
 # Add at the VERY TOP of your file
-from dotenv import load_dotenv
 import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'app'))
+import logging
+import re
+from pathlib import Path
+import requests
+import streamlit as st
+from dotenv import load_dotenv
+from typing import List
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Add the parent directory to the path to fix module imports
+current_dir = Path(__file__).resolve().parent
+project_root = current_dir  # We're running from the root
+sys.path.insert(0, str(project_root))
+
+logger.info(f"Current directory: {current_dir}")
+logger.info(f"Project root: {project_root}")
+logger.info(f"sys.path: {sys.path}")
+
+# Try to import MCP and agent components with improved error handling
+MCP_ENABLED = True
+try:
+    from app.mcp.protocol import ModelContext
+    from app.agents.controller_agent import execute_agent, choose_provider
+    from app.tools.handlers import FunctionHandler
+    from app.orchestrator.chat_orchestrator import get_chat_chain
+    logger.info("MCP components imported successfully")
+except ImportError as e:
+    logger.exception("MCP components not available")
+    MCP_ENABLED = False
+    # Provide dummy implementations
+    class ModelContext:
+        def __init__(self, *args, **kwargs): 
+            self.model_name = "dummy"
+            self.parameters = {}
+            self.tools = []
+            self.memory = {}
+        
+        def add_to_memory(self, *args): pass
+        def update_parameters(self, **kwargs): pass
+        def get_from_memory(self, *args): return None
+    
+    def execute_agent(*args, **kwargs): 
+        return {"answer": "MCP not available", "source_documents": []}
+    
+    def choose_provider(*args, **kwargs): 
+        return "openai"
+    
+    class FunctionHandler:
+        @staticmethod
+        def execute(*args, **kwargs):
+            return {"status": "MCP not available"}
+    
+    def get_chat_chain(*args, **kwargs): 
+        return lambda *a, **k: "Response"
+
 # Verify OpenAI key is loaded
 if not os.getenv("OPENAI_API_KEY"):
-    raise EnvironmentError("OPENAI_API_KEY not found in .env file")
+    logger.warning("OPENAI_API_KEY not found in .env file")
 
-
-import sys
-import pydantic
-from pathlib import Path
-import streamlit as st
-from utils.query_helpers import query_index
-from utils.chat_orchestrator import get_chat_chain
-import requests
-import logging
-from typing import List, Dict
-
-# Add these imports are for Webscapping document ingestion
-from langchain_community.document_loaders import WebBaseLoader
+# Import remaining modules after path setup
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_core.documents import Document
 from newspaper import Article
 from requests_html import HTMLSession
 from langchain_experimental.text_splitter import SemanticChunker
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_core.documents import Document
-
-# LangChain + Vector DB
-from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader
-from orchestrator.chat_orchestrator import get_chat_chain
-from agents.controller_agent import choose_provider
 
 # Constants
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -42,10 +84,15 @@ UPLOAD_DIR = Path("data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 INDEX_ROOT.mkdir(parents=True, exist_ok=True)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
+# Supported LLMs
+llm_providers = [
+    "openai",
+    "claude",
+    "deepseek",
+    "deepseek-chat",
+    "mistral",
+    "anthropic",
+]
 
 # Enhanced Web Scraper Class
 class WebScraper:
@@ -99,7 +146,6 @@ class WebScraper:
                 "Web search requires either duckduckgo-search or google-search-packages"
             )
             return []
-
 
 # Notification Service Class
 class NotificationService:
@@ -187,9 +233,16 @@ class NotificationService:
             return self.send_via_n8n(content, recipients, channels)
         return "No notification service selected"
 
-
 # Initialize notification service
 notification_service = NotificationService()
+
+# Utility: list indexes
+def get_index_list():
+    return (
+        [f.name for f in INDEX_ROOT.iterdir() if f.is_dir()]
+        if INDEX_ROOT.exists()
+        else []
+    )
 
 # Page Config
 st.set_page_config(
@@ -207,26 +260,6 @@ tab1, tab2, tab3, tab4 = st.tabs(
         "🤖 Agent Assistant",
     ]
 )
-
-# Supported LLMs
-llm_providers = [
-    "openai",
-    "claude",
-    "deepseek",
-    "deepseek-chat",
-    "mistral",
-    "anthropic",
-]
-
-
-# Utility: list indexes
-def get_index_list():
-    return (
-        [f.name for f in INDEX_ROOT.iterdir() if f.is_dir()]
-        if INDEX_ROOT.exists()
-        else []
-    )
-
 
 # TAB 1: Ingest Document
 with tab1:
@@ -390,7 +423,11 @@ with tab2:
     if st.button("Run Query") and query:
         try:
             if search_mode == "🔍 Local Index":
-                results = query_index(query, index_name, top_k)
+                # Implement your query_index function or use:
+                embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
+                db = FAISS.load_local(str(INDEX_ROOT / index_name), embeddings)
+                results = db.similarity_search(query, k=top_k)
+                results = [r.page_content for r in results]
             else:
                 scraper = WebScraper()
                 search_query = web_query or query
@@ -444,34 +481,7 @@ with tab2:
         except Exception as e:
             st.error(f"❌ Query failed: {type(e).__name__} — {str(e)[:200]}")
 
-
-# Add web search method to WebScraper class
-class WebScraper:
-    # ... existing methods ...
-
-    def search_web(self, query: str, max_results: int = 3) -> List[str]:
-        """Get search results from DuckDuckGo"""
-        try:
-            from duckduckgo_search import DDGS
-
-            with DDGS() as ddgs:
-                results = [r["href"] for r in ddgs.text(query, max_results=max_results)]
-                return results
-        except:
-            # Fallback to Google
-            return self.google_search(query, max_results)
-
-    def google_search(self, query: str, max_results: int) -> List[str]:
-        """Fallback to Google search"""
-        import googlesearch_python
-
-        return [
-            result.url
-            for result in googlesearch_python.search(query, num_results=max_results)
-        ]
-
-
-# TAB 3: Chat Assistant - Fixed with proper notification placement
+# TAB 3: Chat Assistant
 with tab3:
     st.subheader("💬 Chat with Your Documents")
     index_options = get_index_list()
@@ -661,20 +671,30 @@ with tab3:
                 st.markdown(f"**🤖 Assistant:** {exchange['assistant']}")
                 st.divider()
 
-
 # TAB 4: AI Agent with Notification
-import streamlit as st
-from pathlib import Path
-
-# ... (other imports and functions like choose_provider, get_chat_chain, notification_service)
-
 with tab4:
     st.header("🤖 Agent Assistant")
 
-    # 📁 Document index handling
-    INDEX_ROOT = Path("data/faiss_index")
-    INDEX_ROOT.mkdir(parents=True, exist_ok=True)
+    # Initialize MCP context if available
+    if MCP_ENABLED:
+        agent_context = ModelContext(
+            model_name="gpt-4-turbo",
+            model_provider="openai",
+            parameters={
+                "temperature": 0.5,
+                "max_tokens": 2000
+            },
+            tools=[
+                "load_vector_index",
+                "send_notification",
+                "ingest_document",
+                "web_search"
+            ]
+        )
+    else:
+        st.info("⚠️ MCP framework not available - using basic agent mode")
 
+    # 📁 Document index handling
     index_list = [
         folder.name
         for folder in INDEX_ROOT.iterdir()
@@ -689,10 +709,11 @@ with tab4:
     index_name = st.selectbox(
         "📂 Choose indexed document", index_list, key="agent_index"
     )
-    user_prompt = st.text_area("💬 Enter your question:", key="agent_prompt")
+    # Initialize user_prompt to prevent NameError
+    user_prompt = st.text_area("💬 Enter your question:", key="agent_prompt", value="")
     use_trace = st.checkbox("🧠 Show agent trace", key="agent_trace")
 
-    # 🔔 NOTIFICATION SETTINGS (MOVED TO BOTTOM)
+    # 🔔 NOTIFICATION SETTINGS
     with st.expander("🔔 Notification Options", expanded=False):
         st.markdown("<h4>Notification Settings</h4>", unsafe_allow_html=True)
 
@@ -718,14 +739,32 @@ with tab4:
         )
 
     if st.button("🤖 Run Agent"):
-        if not user_prompt.strip():
+        # Use the session_state version to ensure it exists
+        prompt_text = st.session_state.get("agent_prompt", "")
+
+        if not prompt_text.strip():
             st.warning("Please enter a question before running the agent.")
             st.stop()
 
         try:
-            provider = choose_provider(user_prompt, index_name)
-            chain = get_chat_chain(provider=provider, index_name=index_name)
-            response = chain.invoke({"query": user_prompt})
+            if MCP_ENABLED:
+                # Update context with current state
+                agent_context.session_id = f"session_{index_name}_{prompt_text[:10]}"
+                agent_context.update_parameters(
+                    temperature=st.session_state.get("agent_temp", 0.7)
+                )
+
+                # Execute agent with context
+                response = execute_agent(
+                    user_prompt=prompt_text,
+                    context=agent_context,
+                    index_name=index_name
+                )
+            else:
+                # Fallback to non-MCP agent
+                provider = choose_provider(prompt_text, index_name)
+                chain = get_chat_chain(provider=provider, index_name=index_name)
+                response = chain.invoke({"query": prompt_text})
 
             # Handle response
             if isinstance(response, dict):
@@ -735,6 +774,21 @@ with tab4:
                 answer = str(response)
                 source_docs = []
 
+            # 🟢 SOURCE INDICATOR
+            if source_docs:
+                source_indicator = (
+                    "<div style='margin-bottom: 10px;'>"
+                    "📄 <b>Document-based answer</b> - This response was generated using information from the uploaded document(s)"
+                    "</div>"
+                )
+            else:
+                source_indicator = (
+                    "<div style='margin-bottom: 10px;'>"
+                    "🧠 <b>General knowledge answer</b> - This response was generated using the agent's built-in knowledge"
+                    "</div>"
+                )
+
+            st.markdown(source_indicator, unsafe_allow_html=True)
             st.markdown("### 🧠 Agent Response")
             st.write(answer)
 
@@ -752,7 +806,7 @@ with tab4:
                 else:
                     with st.spinner("🚀 Sending notification..."):
                         notification_content = (
-                            f"Agent Response:\n\n{answer}\n\nQuery: {user_prompt}"
+                            f"Agent Response:\n\n{answer}\n\nQuery: {prompt_text}"
                         )
                         result = notification_service.send_notification(
                             content=notification_content,
@@ -765,26 +819,30 @@ with tab4:
             # Show trace if requested
             if use_trace:
                 st.markdown("### 🔍 Agent Trace")
-                st.markdown(f"🤖 Controller Agent selected provider: `{provider}`")
+                if MCP_ENABLED:
+                    st.markdown(f"🤖 Controller Agent selected provider: `{agent_context.model_name}`")
+                else:
+                    st.markdown(f"🤖 Controller Agent selected provider: `{provider}`")
 
                 if source_docs:
-                    st.markdown("#### 📄 Source Documents")
+                    st.markdown(f"👁️ Source Documents ({len(source_docs)} found)")
                     for i, doc in enumerate(source_docs, 1):
-                        # Truncate and clean document content
+                        # Clean and extract metadata
                         clean_content = doc.page_content.replace("```", "").strip()
-                        preview = (
-                            clean_content[:300] + "..."
-                            if len(clean_content) > 300
-                            else clean_content
-                        )
-                        st.markdown(f"🔹 **Chunk {i}**\n```\n{preview}\n```")
+                        source = doc.metadata.get("source", "Unknown document")
+                        page = doc.metadata.get("page", "N/A")
+
+                        # Display chunk info
+                        with st.expander(
+                            f"📄 Chunk {i} (Source: {source}, Page: {page})"
+                        ):
+                            st.code(clean_content[:1000])  # Show more content
                 else:
                     st.info(
-                        "No source documents were retrieved for this response. "
-                        "This may be because:\n"
-                        "- The answer was generated from the agent's general knowledge\n"
-                        "- No relevant documents matched the query\n"
-                        "- The document index doesn't contain relevant information"
+                        "No source documents retrieved. This means:"
+                        "\n- The answer came from the agent's built-in knowledge"
+                        "\n- No documents matched your specific query"
+                        "\n- The document index doesn't contain relevant information"
                     )
 
         except Exception as e:
