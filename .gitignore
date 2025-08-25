@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Application specific
+*.log
+mcp_logs.db
+.env
+*.db
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# Sensitive information
+.streamlit/secrets.toml
+
+# Large model files
+*.bin
+*.safetensors
