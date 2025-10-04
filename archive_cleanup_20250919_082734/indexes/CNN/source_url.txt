@@ -1,0 +1,3 @@
+URL: https://cnn.com
+Render JS: True
+Depth: 2

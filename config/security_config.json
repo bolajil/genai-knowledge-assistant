@@ -1,0 +1,59 @@
+{
+  "authentication": {
+    "local_enabled": true,
+    "ad_enabled": true,
+    "okta_enabled": true,
+    "mfa_enabled": true
+  },
+  "active_directory": {
+    "configured": true,
+    "server": "",
+    "port": 636,
+    "domain": "",
+    "base_dn": "",
+    "service_account": "",
+    "user_attribute": "sAMAccountName",
+    "group_attribute": "memberOf",
+    "use_ssl": true
+  },
+  "okta": {
+    "configured": true,
+    "domain": "",
+    "client_id": "",
+    "authorization_server": "default",
+    "redirect_uri": "",
+    "scopes": ["openid", "profile", "email", "groups"],
+    "allowed_domains": []
+  },
+  "mfa": {
+    "enabled": true,
+    "totp_enabled": true,
+    "email_enabled": false,
+    "sms_enabled": false,
+    "enforcement": {
+      "admin_required": true,
+      "user_required": false,
+      "viewer_required": false
+    },
+    "email_smtp_server": "",
+    "email_smtp_port": 587,
+    "email_username": "",
+    "sms_provider": "",
+    "sms_api_key": "",
+    "sms_api_secret": ""
+  },
+  "security_policies": {
+    "session_timeout_minutes": 480,
+    "max_failed_attempts": 5,
+    "lockout_duration_minutes": 30,
+    "password_min_length": 8,
+    "require_mfa_for_admin": true
+  },
+  "audit": {
+    "log_authentication_events": true,
+    "log_configuration_changes": true,
+    "retention_days": 90
+  },
+  "created_at": "2025-01-21T19:43:24Z",
+  "updated_at": "2025-01-21T19:43:24Z"
+}
