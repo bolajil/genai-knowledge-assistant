@@ -1,0 +1,207 @@
+# Multi-Vector Storage Configuration
+# VaultMind GenAI Knowledge Assistant
+
+# Primary vector store configuration
+primary_store:
+  type: "pinecone"  # Options: weaviate, faiss, aws_opensearch, azure_ai_search, vertex_ai, pinecone, qdrant, pgvector
+  fallback_enabled: true
+
+# Fallback stores (in order of preference)
+fallback_stores:
+  - type: "weaviate"
+  - type: "faiss"
+  # - type: "aws_opensearch"  # Disabled - network connectivity issues
+  # - type: "azure_ai_search"  # Disabled - not configured
+  # - type: "vertex_ai"  # Disabled - not configured
+  # - type: "qdrant"  # Disabled - not configured
+  # - type: "pgvector"  # Disabled - not configured
+  - type: "mock"
+
+# Vector store configurations
+vector_stores:
+  weaviate:
+    url: "${WEAVIATE_URL}"
+    api_key: "${WEAVIATE_API_KEY}"
+    timeout: 30
+    max_retries: 3
+    batch_size: 100
+    
+  faiss:
+    index_path: "./data/faiss_index"
+    dimension: 384
+    index_type: "IndexFlatIP"
+    batch_size: 1000
+    
+  aws_opensearch:
+    host: "${AWS_OPENSEARCH_HOST}"
+    port: 443
+    use_ssl: true
+    verify_certs: true
+    aws_region: "${AWS_REGION}"
+    aws_access_key_id: "${AWS_ACCESS_KEY_ID}"
+    aws_secret_access_key: "${AWS_SECRET_ACCESS_KEY}"
+    timeout: 30
+    max_retries: 3
+    
+  azure_ai_search:
+    endpoint: "${AZURE_SEARCH_ENDPOINT}"
+    api_key: "${AZURE_SEARCH_API_KEY}"
+    api_version: "2023-11-01"
+    timeout: 30
+    max_retries: 3
+    
+  vertex_ai:
+    project_id: "${GCP_PROJECT_ID}"
+    location: "${GCP_LOCATION}"
+    index_endpoint: "${VERTEX_AI_INDEX_ENDPOINT}"
+    credentials_path: "${GOOGLE_APPLICATION_CREDENTIALS}"
+    timeout: 60
+    
+  pinecone:
+    api_key: "${PINECONE_API_KEY}"
+    # For pods (legacy), set environment (e.g., "us-east1-gcp") and set use_serverless: false
+    environment: "${PINECONE_ENVIRONMENT}"
+    # Serverless settings (recommended)
+    use_serverless: true
+    serverless_cloud: "aws"        # aws | gcp
+    serverless_region: "us-east-1" # choose nearest region
+    # Match your embedding model
+    vector_dimension: 384           # 384 (MiniLM), 1536/3072 (OpenAI), etc.
+    metric: "cosine"               # cosine | euclidean | dotproduct
+    timeout: 30
+    max_retries: 3
+    
+  qdrant:
+    url: "${QDRANT_URL}"
+    api_key: "${QDRANT_API_KEY}"
+    port: 6333
+    timeout: 30
+    max_retries: 3
+    
+  pgvector:
+    host: "${POSTGRES_HOST}"
+    port: 5432
+    database: "${POSTGRES_DB}"
+    username: "${POSTGRES_USER}"
+    password: "${POSTGRES_PASSWORD}"
+    timeout: 30
+    max_connections: 10
+
+# Routing configuration
+routing:
+  # Collection-based routing rules
+  collection_rules:
+    - pattern: "bylaws_*"
+      target_store: "weaviate"
+    - pattern: "documents_*"
+      target_store: "aws_opensearch"
+    - pattern: "embeddings_*"
+      target_store: "pinecone"
+    - pattern: "test_*"
+      target_store: "faiss"
+  
+  # Default routing behavior
+  default_behavior: "primary_store"  # Options: primary_store, round_robin, load_balance
+
+# Parallel ingestion configuration
+parallel_ingestion:
+  enabled: false
+  target_stores:
+    - "weaviate"
+    - "faiss"
+  max_concurrent: 3
+  batch_size: 50
+  timeout: 120
+
+# Query configuration
+query:
+  # Fallback behavior
+  enable_fallback: true
+  fallback_timeout: 10
+  max_fallback_attempts: 2
+  
+  # Search parameters
+  default_top_k: 10
+  max_top_k: 100
+  default_similarity_threshold: 0.7
+  
+  # Hybrid search settings
+  hybrid_search:
+    enabled: true
+    vector_weight: 0.7
+    keyword_weight: 0.3
+    rerank_enabled: true
+
+# Performance settings
+performance:
+  # Connection pooling
+  connection_pool_size: 10
+  connection_timeout: 30
+  
+  # Caching
+  enable_caching: true
+  cache_ttl: 300  # 5 minutes
+  max_cache_size_mb: 100
+  
+  # Batch processing
+  default_batch_size: 100
+  max_batch_size: 1000
+  
+  # Async settings
+  max_concurrent_operations: 5
+  operation_timeout: 60
+
+# Monitoring and logging
+monitoring:
+  # Health checks
+  enable_health_checks: true
+  health_check_interval: 300  # 5 minutes
+  health_check_timeout: 10
+  
+  # Metrics collection
+  enable_metrics: true
+  metrics_interval: 60  # 1 minute
+  
+  # Logging
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  log_queries: false
+  log_performance: true
+
+# Security settings
+security:
+  # Encryption
+  encrypt_in_transit: true
+  verify_ssl_certificates: true
+  
+  # Authentication
+  enable_auth_logging: true
+  
+  # API rate limiting
+  enable_rate_limiting: false
+  requests_per_minute: 1000
+
+# Feature flags
+features:
+  # Experimental features
+  enable_auto_scaling: false
+  enable_smart_routing: false
+  enable_predictive_caching: false
+  
+  # UI features
+  show_performance_metrics: true
+  show_debug_info: false
+  enable_advanced_filters: true
+
+# Development settings
+development:
+  # Mock providers
+  enable_mock_providers: true
+  mock_response_delay: 0.1
+  
+  # Testing
+  enable_test_mode: false
+  test_collection_prefix: "test_"
+  
+  # Debug settings
+  verbose_logging: false
+  enable_profiling: false
