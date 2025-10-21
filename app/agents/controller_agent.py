@@ -215,6 +215,44 @@ Please provide a detailed, accurate response based solely on the document conten
             except Exception as e:
                 print(f"Enterprise retrieval failed, falling back to real-time: {e}")
             
+            # New: Try standard retriever (FAISS or text) before real-time disk read
+            try:
+                retriever = get_valid_retriever(index_name)
+            except Exception as _rerr:
+                retriever = None
+            if retriever is not None:
+                try:
+                    chain = get_chat_chain(context, retriever)
+                    qa_out = chain.invoke(user_prompt)
+                    # LangChain RetrievalQA returns a dict with 'result' and 'source_documents'
+                    if isinstance(qa_out, dict):
+                        result_text = qa_out.get("result", "")
+                        docs = qa_out.get("source_documents", []) or []
+                    else:
+                        # Fallback if an unexpected type is returned
+                        result_text = str(getattr(qa_out, "content", qa_out))
+                        docs = []
+
+                    src_docs = []
+                    for d in docs:
+                        try:
+                            src_docs.append({
+                                'page_content': getattr(d, 'page_content', ''),
+                                'metadata': getattr(d, 'metadata', {}) or {}
+                            })
+                        except Exception:
+                            pass
+
+                    if result_text:
+                        return {
+                            "result": result_text,
+                            "source_documents": src_docs,
+                            "retrieval_method": "faiss_or_text_retriever"
+                        }
+                except Exception as _qa_err:
+                    # If retriever path fails, continue to real-time fallback below
+                    pass
+
             # Fallback to real-time retrieval
             from utils.real_time_retrieval import get_real_time_retriever, verify_fresh_content
             

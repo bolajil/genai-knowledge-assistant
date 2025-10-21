@@ -210,7 +210,9 @@ class EnterpriseAuth:
                 }
             return None
         except Exception as e:
-            print(f"Local authentication error: {e}")
+            import logging as _logging, json as _json
+            safe_msg = _json.dumps({"error": str(e)}, ensure_ascii=True)
+            _logging.getLogger(__name__).warning("Local authentication error: %s", safe_msg)
             return None
     
     def _process_local_login(self, username: str, password: str, remember_me: bool, trust_device: bool, config: dict) -> bool:
@@ -627,8 +629,14 @@ class EnterpriseAuth:
             'details': details or {}
         }
         
-        # In production, this would write to a secure audit log
-        print(f"[AUDIT] {log_entry}")
+        # Use logger to avoid Windows console encoding issues
+        try:
+            import logging as _logging, json as _json
+            msg = _json.dumps(log_entry, ensure_ascii=True)  # ASCII-safe
+            _logging.getLogger(__name__).info("[AUDIT] %s", msg)
+        except Exception:
+            # Last resort: swallow logging errors to not break auth flow
+            pass
     
     def _get_client_ip(self) -> str:
         """Get client IP address from request headers"""

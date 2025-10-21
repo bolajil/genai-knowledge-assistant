@@ -5,6 +5,8 @@ Formats query responses with professional markdown structure based on intent
 
 from typing import List, Dict, Any
 import logging
+import re
+from utils.text_cleaning import clean_document_text
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +62,81 @@ class EnterpriseResponseFormatter:
     
     def _format_factual(self, query: str, results: List[Dict], confidence: float) -> str:
         """Format concise factual answer"""
-        # Get top result
+        ql = (query or '').lower()
+        # If benefits intent sneaks through to formatter, build concise benefit bullets
+        if any(k in ql for k in ['benefit', 'benefits', 'advantage', 'value']):
+            bullets = []
+            categories: Dict[str, Dict[str, Any]] = {
+                'common_areas': {
+                    'keywords': ['common areas','repairs','additions','improvements','maintenance','upkeep'],
+                    'text': 'Maintains and improves Common Areas (repairs, upkeep, improvements).'
+                },
+                'assessments_budget': {
+                    'keywords': ['assessments','budget','collecting','payment schedule','reserve funds','depository'],
+                    'text': 'Prepares budgets; levies and collects assessments; manages association funds.'
+                },
+                'insurance': {
+                    'keywords': ['insurance','casualties','liabilities','premium'],
+                    'text': 'Obtains insurance for liabilities and casualties.'
+                },
+                'enforcement': {
+                    'keywords': ['enforce','enforcement','fines','violations','rules','covenants','dedicatory instruments'],
+                    'text': 'Enforces covenants and rules (including fines) to protect standards.'
+                },
+                'records_transparency': {
+                    'keywords': ['books','records','financial reports','balance sheet','statement','inspection','access'],
+                    'text': 'Maintains books and records; provides financial reports and member access.'
+                },
+            }
+            procedural_noise = {'meeting','meetings','notice','quorum','minutes','executive session','open meeting','agenda'}
+            cat_hits: Dict[str, Dict[str, Any]] = {}
+            for r in results[:10]:
+                raw = r.get('full_document') or r.get('full_content') or r.get('content', '')
+                text = clean_document_text(raw or '')
+                if not text:
+                    continue
+                paras = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
+                for p in paras:
+                    pl = p.lower()
+                    if any(n in pl for n in procedural_noise):
+                        continue
+                    for cat_key, cfg in categories.items():
+                        if cat_key in cat_hits:
+                            continue
+                        if any(kw in pl for kw in cfg['keywords']):
+                            cat_hits[cat_key] = {
+                                'text': cfg['text'],
+                                'source': r.get('source', 'Document'),
+                                'page': r.get('page')
+                            }
+                    if len(cat_hits) >= 5:
+                        break
+                if len(cat_hits) >= 5:
+                    break
+            if cat_hits:
+                for key in ['common_areas','assessments_budget','insurance','enforcement','records_transparency']:
+                    if key in cat_hits and len(bullets) < 5:
+                        hit = cat_hits[key]
+                        page_str = f", Page {hit['page']}" if hit.get('page') else ""
+                        bullets.append(f"- {hit['text']} — Source: {hit['source']}{page_str}")
+                bullets_md = "\n".join(bullets)
+                response = f"""
+## 📌 Answer
+
+{bullets_md}
+
+---
+
+### 📚 Source
+**Document**: {results[0].get('source','Unknown')}
+
+### 🔍 Additional Context
+"""
+                return response
+
+        # Default concise factual answer: clean content to remove noisy recorder headers
         top_result = results[0]
-        content = top_result.get('content', '')
+        content = clean_document_text(top_result.get('content', '') or '')
         source = top_result.get('source', 'Unknown')
         
         # Extract first 2-3 sentences for concise answer

@@ -12,6 +12,22 @@ from typing import List, Dict, Any, Optional
 import io
 import base64
 from pathlib import Path
+import re
+import os
+from utils.text_cleaning import (
+    clean_document_text,
+    is_noise_text,
+    summarize_document_content,
+    extract_document_sections,
+)
+from utils.enterprise_search_engine import get_enterprise_search_engine
+from utils.enterprise_response_formatter import get_enterprise_formatter
+try:
+    from langchain_openai import ChatOpenAI
+    from langchain_core.prompts import ChatPromptTemplate
+except Exception:
+    ChatOpenAI = None
+    ChatPromptTemplate = None
 
 class PowerBIIntegration:
     """PowerBI integration for embedding reports and dashboards"""
@@ -2868,7 +2884,7 @@ def render_multi_source_search(available_indexes, auth_middleware):
                         search_type=search_type
                     )
                     
-                    display_search_results(search_results, result_format)
+                    display_search_results(search_results, result_format, search_query)
                     
                     auth_middleware.log_user_action("ENHANCED_MULTI_SOURCE_SEARCH", {
                         "query": search_query,
@@ -2902,9 +2918,424 @@ def perform_multi_source_search(query, selected_indexes, include_web, include_ex
     
     return results
 
+def synthesize_topline_answer(search_results: Dict[str, Any], query: str) -> Optional[str]:
+    """Create a concise, query-aligned answer with citations using enterprise utilities.
+    Uses existing document results and augments with enterprise search if needed.
+    """
+    try:
+        docs = search_results.get('documents', []) or []
+        # Normalize results for formatter
+        norm_results: List[Dict[str, Any]] = []
+        index_names = set()
+        for d in docs:
+            md = d.get('metadata', {}) or {}
+            index_names.add(md.get('index_name') or md.get('source') or d.get('source'))
+            norm_results.append({
+                'content': clean_document_text(d.get('content', '') or ''),
+                'source': md.get('source') or d.get('source', 'Document'),
+                'page': md.get('page') or d.get('page'),
+                'full_content': clean_document_text(((md.get('full_content') if isinstance(md, dict) else None) or d.get('full_content') or '')),
+                'full_document': clean_document_text(((md.get('full_document') if isinstance(md, dict) else None) or d.get('full_document') or ''))
+            })
+
+        # If not enough evidence, augment via enterprise search on the same index(es)
+        index_names = {n for n in index_names if n}
+        if (len(norm_results) < 3) and index_names:
+            engine = get_enterprise_search_engine()
+            for idx in list(index_names)[:2]:  # augment with up to two collections
+                try:
+                    es_results = engine.search(query, idx, strategy='comprehensive', max_results=5)
+                    for r in es_results:
+                        norm_results.append({
+                            'content': clean_document_text(r.content or ''),
+                            'source': f"{idx}",
+                            'page': r.page,
+                            'full_content': clean_document_text(r.content or ''),
+                            'full_document': clean_document_text((r.context or '') if isinstance(r.context, str) else '')
+                        })
+                except Exception:
+                    continue
+
+        if not norm_results:
+            return None
+
+        # If user asked for benefits, build a benefit-focused answer from the documents
+        ql = (query or '').lower()
+        benefit_triggers = ['benefit', 'benefits', 'advantage', 'value']
+        if any(bt in ql for bt in benefit_triggers):
+            # Ensure we have at least one full-document context when possible
+            try:
+                has_full_doc = any(bool(r.get('full_document')) for r in norm_results)
+                if not has_full_doc and index_names:
+                    base_path = os.path.join(os.path.dirname(__file__), '..', 'data')
+                    for idx in list(index_names)[:2]:
+                        candidates = [
+                            os.path.join(base_path, 'indexes', f'{idx}_index', 'extracted_text.txt'),
+                            os.path.join(base_path, 'indexes', idx, 'extracted_text.txt'),
+                        ]
+                        for tf in candidates:
+                            if os.path.exists(tf):
+                                with open(tf, 'r', encoding='utf-8') as f:
+                                    raw = f.read()
+                                doc_clean = clean_document_text(raw) or ''
+                                if doc_clean:
+                                    norm_results.append({
+                                        'content': summarize_document_content(doc_clean, max_length=400),
+                                        'source': idx,
+                                        'page': None,
+                                        'full_content': doc_clean,
+                                        'full_document': doc_clean,
+                                    })
+                                break
+            except Exception:
+                pass
+            # Try rule-based concise bullets
+            bf = _build_benefit_answer(query, norm_results)
+            # If insufficient or None, try full RAG LLM synthesis when available
+            if (not bf or bf.count('\n- ') < 3) and os.environ.get("OPENAI_API_KEY") and ChatOpenAI is not None:
+                try:
+                    rag = _rag_benefits_llm_answer(query, norm_results)
+                    if rag and rag.count('\n- ') >= 3:
+                        return rag
+                except Exception:
+                    pass
+            # Optional LLM compression to enforce brevity
+            if bf and os.environ.get("OPENAI_API_KEY") and ChatOpenAI is not None:
+                try:
+                    bf = _llm_refine_benefits(bf, query)
+                except Exception:
+                    pass
+            if bf:
+                return bf
+
+        # Simple intent detection (fallback)
+        if any(k in ql for k in ['how to', 'steps', 'procedure']):
+            intent = 'procedural'
+        elif any(k in ql for k in ['compare', 'difference', 'vs']):
+            intent = 'comparative'
+        elif any(k in ql for k in ['benefit', 'advantage', 'purpose', 'why']):
+            intent = 'factual'
+        else:
+            intent = 'exploratory'
+
+        formatter = get_enterprise_formatter()
+        answer_md = formatter.format_response(query, intent, norm_results[:10], confidence=0.75)
+        return answer_md
+    except Exception:
+        return None
+
+def _llm_refine_benefits(bullets_markdown: str, query: str) -> str:
+    """Use an LLM to compress benefit bullets to 3–5 ultra-concise lines.
+    Preserves source suffixes as much as possible.
+    """
+    if ChatOpenAI is None or not os.environ.get("OPENAI_API_KEY"):
+        return bullets_markdown
+    prompt = ChatPromptTemplate.from_template(
+        """
+Rewrite the following bullet list into 3-5 ULTRA-CONCISE bullets (<=15 words each).
+Keep the trailing "— Source: ..." part unchanged for each bullet if present.
+Do not add new information. Keep it specific to the user's query: {query}.
+Return only the bullets and nothing else.
+
+Bullets:
+{bullets}
+"""
+    )
+    llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+    resp = llm.invoke(prompt.format_messages(query=query, bullets=bullets_markdown))
+    text = resp.content.strip()
+    # Safety: ensure it looks like bullets; else fallback
+    if text and text.count("- ") >= 1:
+        return text
+    return bullets_markdown
+
+def _rag_benefits_llm_answer(query: str, norm_results: List[Dict[str, Any]]) -> Optional[str]:
+    """RAG synthesis for benefits using LLM on extracted context from full documents.
+    Returns concise bullets grounded in provided context.
+    """
+    if ChatOpenAI is None or not os.environ.get("OPENAI_API_KEY"):
+        return None
+    # Build focused context from full_document/full_content
+    kw = [
+        'common areas','maintenance','repairs','improvements','assessments','budget','collect','insurance',
+        'enforce','violations','rules','covenants','books','records','financial','management','contracts',
+        'architectural','approval','dispute','mediation','arbitration','litigation'
+    ]
+    context_chunks: List[str] = []
+    seen = set()
+    for r in norm_results:
+        raw = r.get('full_document') or r.get('full_content') or r.get('content') or ''
+        if not raw:
+            continue
+        # Split into paragraphs and keep only those with keywords
+        paras = [p.strip() for p in re.split(r"\n\s*\n+", raw) if p.strip()]
+        for p in paras:
+            pl = p.lower()
+            if any(k in pl for k in kw):
+                key = p[:160]
+                if key not in seen:
+                    seen.add(key)
+                    context_chunks.append(p)
+            if len(context_chunks) >= 40:
+                break
+        if len(context_chunks) >= 40:
+            break
+    if not context_chunks:
+        return None
+    context_text = "\n\n".join(context_chunks)[:8000]
+    prompt = ChatPromptTemplate.from_template(
+        """
+You are a legal RAG assistant. Based ONLY on the context below from HOA Bylaws, list 3-5 concise benefits homeowners receive from the Association's powers and duties.
+Requirements:
+- Bullets must be <=15 words each, clear and specific
+- No extra prose, no headings
+- Add trailing: "— Source: Bylaws" (append ", Page X" if explicitly shown in the text)
+- Do NOT invent content. If unsure, omit.
+
+Context:
+{context}
+
+User query: {query}
+
+Bulleted answer only:
+"""
+    )
+    llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+    resp = llm.invoke(prompt.format_messages(context=context_text, query=query))
+    text = (resp.content or '').strip()
+    # Ensure bullets
+    if text and text.startswith("-"):
+        # Keep at most 5 bullets
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip().startswith('-')]
+        if lines:
+            return "\n".join(lines[:5])
+    return None
+
+def _build_benefit_answer(query: str, norm_results: List[Dict[str, Any]]) -> Optional[str]:
+    """Derive a benefits-aligned answer strictly from retrieved content.
+    - Prefers full_content when available; otherwise uses snippet content.
+    - Extracts sentences/paragraphs containing benefit-related concepts.
+    - Returns a concise markdown answer with per-bullet citations.
+    """
+    try:
+        if not norm_results:
+            return None
+        # Keywords indicating benefits or value provided by the HOA/Association
+        benefit_terms = {
+            'benefit','benefits','advantage','purpose','services','maintenance','repair','common areas','amenities',
+            'insurance','enforcement','records','access','management','operate the association','budget','assessments',
+            'safety','security','preservation','upkeep','improvements','utilities','landscaping','care','operation',
+            'contracts','architectural','approval','transparency','financial reports','dispute','mediation','arbitration'
+        }
+        benefit_verbs = {
+            'maintain','maintenance','operate','operation','repair','improve','improvements','assess','assessments',
+            'collect','budget','insure','insurance','enforce','enforcement','record','records','provide','manage',
+            'contract','approve','approve','ensure','preserve','secure','disclose','report'
+        }
+        # Filter out procedural/meeting heavy paragraphs entirely (too verbose for benefits)
+        procedural_noise = {
+            'meeting','meetings','notice','quorum','minutes','executive session','open meeting','waiver of notice',
+            'special meetings','board meeting','post notice','agenda','continued meeting','organizational meetings'
+        }
+
+        # Benefit category mapping -> (keywords, concise bullet text)
+        categories: Dict[str, Dict[str, Any]] = {
+            'common_areas': {
+                'keywords': ['common areas','repairs','additions','improvements','maintenance','upkeep'],
+                'text': 'Maintains and improves Common Areas (repairs, upkeep, improvements).'
+            },
+            'assessments_budget': {
+                'keywords': ['assessments','budget','collecting','payment schedule','reserve funds','depository'],
+                'text': 'Prepares budgets; levies and collects assessments; manages association funds.'
+            },
+            'insurance': {
+                'keywords': ['insurance','casualties','liabilities','premium'],
+                'text': 'Obtains insurance for liabilities and casualties.'
+            },
+            'enforcement': {
+                'keywords': ['enforce','enforcement','fines','violations','rules','covenants','dedicatory instruments'],
+                'text': 'Enforces covenants and rules (including fines) to protect standards.'
+            },
+            'records_transparency': {
+                'keywords': ['books','records','financial reports','balance sheet','statement','inspection','access'],
+                'text': 'Maintains books and records; provides financial reports and member access.'
+            },
+            'management_contracts': {
+                'keywords': ['management agent','contracts','services','personnel','hire','dismiss'],
+                'text': 'Employs management/contractors and oversees services/personnel.'
+            },
+            'architectural': {
+                'keywords': ['architectural','arc','approval','improvements within the property'],
+                'text': 'Oversees architectural approvals and property modifications.'
+            },
+            'dispute_resolution': {
+                'keywords': ['mediation','arbitration','dispute','litigation','commencing or defending'],
+                'text': 'Resolves disputes and may pursue or defend litigation for the Association.'
+            },
+        }
+
+        extracted: List[Dict[str, Any]] = []
+        for r in norm_results:
+            raw = r.get('full_document') or r.get('full_content') or r.get('content') or ''
+            text = clean_document_text(raw)
+            if not text:
+                continue
+            # Split by paragraphs first
+            paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
+            for para in paragraphs:
+                pl = para.lower()
+                # Skip procedural/meeting paragraphs entirely for benefits view
+                if any(t in pl for t in procedural_noise):
+                    continue
+                base = sum(1 for t in benefit_terms if t in pl)
+                if base == 0:
+                    continue
+                verb_score = sum(1 for v in benefit_verbs if re.search(rf"\b{re.escape(v)}\b", pl))
+                score = base + verb_score
+                if any(x in pl for x in ['common areas','assessments','enforcement','insurance','records','management']):
+                    score += 2
+
+                # Build a compact one-sentence summary
+                sentences = re.split(r"(?<=[.!?])\s+", para)
+                chosen = None
+                for s in sentences:
+                    sl = s.lower()
+                    if any(v in sl for v in benefit_verbs) and len(s.strip()) > 30:
+                        chosen = s.strip()
+                        break
+                if not chosen and sentences:
+                    chosen = sentences[0].strip()
+                # Trim to ~180 chars
+                if chosen and len(chosen) > 180:
+                    cut = chosen[:180]
+                    chosen = (cut.rsplit(' ', 1)[0] if ' ' in cut else cut) + '...'
+                if not chosen:
+                    continue
+                extracted.append({
+                    'text': chosen,
+                    'score': score,
+                    'source': r.get('source', 'Document'),
+                    'page': r.get('page')
+                })
+        if not extracted:
+            return None
+        # Map extracted sentences to concise benefit categories and pick first page per category
+        cat_hits: Dict[str, Dict[str, Any]] = {}
+        for item in sorted(extracted, key=lambda x: x['score'], reverse=True):
+            tl = item['text'].lower()
+            for cat_key, cfg in categories.items():
+                if any(kw in tl for kw in cfg['keywords']):
+                    if cat_key not in cat_hits:
+                        cat_hits[cat_key] = {
+                            'text': cfg['text'],
+                            'source': item.get('source', 'Document'),
+                            'page': item.get('page')
+                        }
+                    break
+
+        # Compose up to 5 bullets
+        lines = ["**Key benefits of the HOA (from the Bylaws):**"]
+        count = 0
+        for cat_key in [
+            'common_areas','assessments_budget','insurance','enforcement','records_transparency',
+            'management_contracts','architectural','dispute_resolution']:
+            if cat_key in cat_hits:
+                hit = cat_hits[cat_key]
+                page_str = f", Page {hit['page']}" if hit.get('page') else ""
+                lines.append(f"- {hit['text']} — Source: {hit['source']}{page_str}")
+                count += 1
+                if count >= 5:
+                    break
+        return "\n".join(lines)
+    except Exception:
+        return None
+
 def search_document_indexes(query, selected_indexes, max_results, search_type):
     """Search through document indexes using existing search functionality"""
     all_results = []
+    
+    # Helper: build a human-friendly snippet around the query without mid-word cuts
+    def _build_snippet(text: str, q: str, max_len: Optional[int] = None, ctx_sentences: int = 3) -> str:
+        """Create a snippet composed of full sentences around the first query match.
+        - Falls back to the first few sentences if no match.
+        - Avoids mid-word cuts; trims by sentence count, not characters when possible.
+        """
+        if not text:
+            return ""
+        cleaned = clean_document_text(text) or ""
+        if not cleaned:
+            return ""
+        # Hyphenation repair and hard linebreak smoothing
+        try:
+            cleaned = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", cleaned)
+            cleaned = re.sub(r"\s*\n\s*", " ", cleaned)
+        except Exception:
+            pass
+        # Split into sentences (keep indices)
+        try:
+            # Simple sentence splitter: split on punctuation followed by whitespace/newline
+            sent_spans = []
+            start = 0
+            for m in re.finditer(r"[.!?]+\s+", cleaned):
+                end = m.end()
+                sent_spans.append((start, end))
+                start = end
+            # Last sentence
+            if start < len(cleaned):
+                sent_spans.append((start, len(cleaned)))
+        except Exception:
+            sent_spans = [(0, len(cleaned))]
+        
+        # Find match sentence
+        match_idx = None
+        if q and isinstance(q, str) and q.strip():
+            try:
+                m = re.search(re.escape(q.strip()), cleaned, flags=re.IGNORECASE)
+                if m:
+                    for i, (s, e) in enumerate(sent_spans):
+                        if s <= m.start() < e:
+                            match_idx = i
+                            break
+            except Exception:
+                match_idx = None
+        
+        # Build snippet from surrounding sentences
+        def join_spans(spans):
+            return " ".join(cleaned[s:e].strip() for s, e in spans if cleaned[s:e].strip())
+        
+        if match_idx is not None:
+            s_idx = max(0, match_idx - ctx_sentences)
+            e_idx = min(len(sent_spans), match_idx + ctx_sentences + 1)
+            candidate = join_spans(sent_spans[s_idx:e_idx]).strip()
+            if len(candidate) <= max_len:
+                return candidate
+            # If too long, reduce context windows
+            while len(candidate) > max_len and (e_idx - s_idx) > 1:
+                if (e_idx - match_idx) > (match_idx - s_idx + 1):
+                    e_idx -= 1
+                else:
+                    s_idx += 1
+                candidate = join_spans(sent_spans[s_idx:e_idx]).strip()
+            if max_len is not None and len(candidate) > max_len:
+                # Last resort: cut on word boundary
+                cut = candidate[:max_len]
+                return (cut.rsplit(' ', 1)[0] if ' ' in cut else cut) + '...'
+            return candidate
+        
+        # No match: take first few sentences
+        out_spans = []
+        for s, e in sent_spans:
+            seg = cleaned[s:e].strip()
+            if not seg:
+                continue
+            if max_len is not None and len(" ".join([cleaned[a:b].strip() for a,b in out_spans] + [seg])) > max_len:
+                break
+            out_spans.append((s, e))
+            if len(out_spans) >= (ctx_sentences + 1):
+                break
+        if out_spans:
+            return join_spans(out_spans)
+        return cleaned if max_len is None else (cleaned[:max_len].rsplit(' ', 1)[0] + '...')
     
     for index_name in selected_indexes:
         try:
@@ -2940,7 +3371,9 @@ def search_document_indexes(query, selected_indexes, max_results, search_type):
                     possible_paths = [
                         os.path.join(base_path, 'faiss_index', f'{index_name}_index'),
                         os.path.join(base_path, 'faiss_index', index_name),
-                        os.path.join(base_path, 'indexes', f'{index_name}_index_index')
+                        # Also support directory-based indexes discovered under data/indexes
+                        os.path.join(base_path, 'indexes', f'{index_name}_index'),
+                        os.path.join(base_path, 'indexes', index_name)
                     ]
                     
                     index_path = None
@@ -2964,20 +3397,61 @@ def search_document_indexes(query, selected_indexes, max_results, search_type):
                                     with open(meta_path, 'rb') as f:
                                         metadata = pickle.load(f)
                                     break
+                            # Compatibility: support documents.pkl produced by local FAISS ingestion
+                            if metadata is None:
+                                docs_pkl = os.path.join(index_path, 'documents.pkl')
+                                if os.path.exists(docs_pkl):
+                                    try:
+                                        with open(docs_pkl, 'rb') as f:
+                                            payload = pickle.load(f)
+                                        documents = payload.get('documents') if isinstance(payload, dict) else None
+                                        metadatas = payload.get('metadatas') if isinstance(payload, dict) else None
+                                        if isinstance(documents, list):
+                                            adapted = []
+                                            for i, text in enumerate(documents):
+                                                md = {}
+                                                if isinstance(metadatas, list) and i < len(metadatas) and isinstance(metadatas[i], dict):
+                                                    md = metadatas[i]
+                                                adapted.append({
+                                                    'content': text,
+                                                    'source': md.get('source', f'{index_name}.pdf'),
+                                                    'page': md.get('page') if isinstance(md.get('page'), (int, str)) else None,
+                                                })
+                                            if adapted:
+                                                metadata = adapted
+                                    except Exception as _docs_err:
+                                        st.info(f"Note: Could not read documents.pkl for {index_name}: {_docs_err}")
                             
                             # If no metadata file, try to read text content directly
                             if metadata is None:
+                                # Try same folder first
                                 text_file = os.path.join(index_path, 'extracted_text.txt')
                                 if os.path.exists(text_file):
                                     with open(text_file, 'r', encoding='utf-8') as f:
                                         content = f.read()
-                                    # Create simple metadata structure
                                     chunks = [content[i:i+1000] for i in range(0, len(content), 1000)]
                                     metadata = [{
                                         'content': chunk,
                                         'source': f'{index_name}.pdf',
                                         'page': i//10 + 1
                                     } for i, chunk in enumerate(chunks)]
+                                else:
+                                    # Fallback: look under data/indexes/<name> for extracted_text.txt
+                                    text_candidates = [
+                                        os.path.join(base_path, 'indexes', f'{index_name}_index', 'extracted_text.txt'),
+                                        os.path.join(base_path, 'indexes', index_name, 'extracted_text.txt'),
+                                    ]
+                                    for tf in text_candidates:
+                                        if os.path.exists(tf):
+                                            with open(tf, 'r', encoding='utf-8') as f:
+                                                content = f.read()
+                                            chunks = [content[i:i+1000] for i in range(0, len(content), 1000)]
+                                            metadata = [{
+                                                'content': chunk,
+                                                'source': f'{index_name}.pdf',
+                                                'page': i//10 + 1
+                                            } for i, chunk in enumerate(chunks)]
+                                            break
                         
                             if metadata:
                                 # Generate query embedding
@@ -2990,22 +3464,74 @@ def search_document_indexes(query, selected_indexes, max_results, search_type):
                                 # Format results
                                 for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
                                     if idx < len(metadata) and idx >= 0:
-                                        doc_metadata = metadata[idx]
+                                        doc_metadata = metadata[idx] or {}
+                                        # Combine neighboring chunks to avoid sentence cuts across chunk boundaries
+                                        neighbor_indices = range(max(0, idx - 8), min(len(metadata), idx + 9))
+                                        neighbor_texts = []
+                                        for j in neighbor_indices:
+                                            try:
+                                                neighbor_texts.append((metadata[j] or {}).get('content', '') or '')
+                                            except Exception:
+                                                continue
+                                        context_text = " \n".join(t for t in neighbor_texts if t)
+                                        cleaned_text = clean_document_text(context_text or (doc_metadata.get('content', '') or ''))
+                                        if not cleaned_text:
+                                            continue
+                                        # Prefer full-document context when available (data/indexes/.../extracted_text.txt)
+                                        doc_level_snippet = None
+                                        doc_full_clean = None
+                                        try:
+                                            full_doc_candidates = [
+                                                os.path.join(base_path, 'indexes', f'{index_name}_index', 'extracted_text.txt'),
+                                                os.path.join(base_path, 'indexes', index_name, 'extracted_text.txt'),
+                                            ]
+                                            for tf in full_doc_candidates:
+                                                if os.path.exists(tf):
+                                                    with open(tf, 'r', encoding='utf-8') as f:
+                                                        doc_raw = f.read()
+                                                    doc_clean = clean_document_text(doc_raw) or ''
+                                                    doc_full_clean = doc_clean or doc_full_clean
+                                                    # Build paragraph/section based snippet on full doc
+                                                    tmp = _build_snippet(doc_clean, query, max_len=None, ctx_sentences=4)
+                                                    if tmp:
+                                                        doc_level_snippet = tmp
+                                                        break
+                                        except Exception:
+                                            doc_level_snippet = None
+                                        # Prefer section-level context if we can detect a section that contains the query
+                                        snippet = doc_level_snippet
+                                        try:
+                                            sections = extract_document_sections(cleaned_text)
+                                            if isinstance(sections, dict) and sections:
+                                                ql = (query or "").strip().lower()
+                                                for header, body in sections.items():
+                                                    target = f"{header}\n{body}" if body else header
+                                                    if ql and ql in target.lower():
+                                                        snippet = snippet or target.strip()
+                                                        break
+                                        except Exception:
+                                            snippet = None
+                                        if not snippet:
+                                            # Fall back to sentence-based snippet with no truncation
+                                            snippet = _build_snippet(cleaned_text, query, max_len=None, ctx_sentences=4)
                                         # Convert FAISS distance to similarity score
                                         similarity_score = 1.0 / (1.0 + float(score))
                                         index_results.append({
-                                            'content': doc_metadata.get('content', 'No content available')[:500] + '...',
+                                            'content': snippet,
                                             'score': similarity_score,
                                             'metadata': {
                                                 'source': doc_metadata.get('source', f'{index_name}.pdf'),
                                                 'page': doc_metadata.get('page', i + 1),
                                                 'index_name': index_name,
-                                                'full_content': doc_metadata.get('content', '')
+                                                'full_content': cleaned_text,
+                                                'full_document': doc_full_clean,
+                                                'chunk_id': idx,
+                                                'context_window': [max(0, idx - 1), min(len(metadata) - 1, idx + 1)]
                                             },
                                             'relevance': similarity_score
                                         })
                             else:
-                                st.warning(f"No metadata found for {index_name} index")
+                                st.warning(f"No metadata found for {index_name} index at {index_path}")
                         else:
                             st.warning(f"FAISS index file not found for {index_name}")
                     else:
@@ -3242,7 +3768,7 @@ def search_powerbi_reports(query, max_results):
         'type': 'Dashboard'
     }] if query else []
 
-def display_search_results(search_results, result_format):
+def display_search_results(search_results, result_format, query=None):
     """Display search results in the specified format"""
     if not search_results:
         st.info("No results found across all sources")
@@ -3250,6 +3776,16 @@ def display_search_results(search_results, result_format):
     
     total_results = sum(len(results) for results in search_results.values())
     st.success(f"Found {total_results} results across {len(search_results)} source types")
+    
+    # Synthesize and display a concise answer aligned with the query
+    try:
+        answer_md = synthesize_topline_answer(search_results, query)
+        if answer_md:
+            st.markdown("### ✅ Answer")
+            st.markdown(answer_md)
+            st.divider()
+    except Exception:
+        pass
     
     # Create summary table
     summary_data = []
@@ -3280,16 +3816,41 @@ def display_search_results(search_results, result_format):
                         col1, col2 = st.columns([3, 1])
                         
                         with col1:
-                            title = result.get('title', result.get('content', '')[:100] + '...')
-                            st.markdown(f"**{i+1}. {title}**")
+                            st.markdown(f"**{i+1}.**")
+                            # Compact source/page header
+                            try:
+                                page = result.get('metadata', {}).get('page')
+                                src = result.get('source', 'Unknown')
+                                if page is not None and str(page).strip():
+                                    st.caption(f"Source: {src} • Page: {page}")
+                                else:
+                                    st.caption(f"Source: {src}")
+                            except Exception:
+                                pass
                             
                             content = result.get('content', '')
-                            if len(content) > 200:
-                                content = content[:200] + '...'
+                            # Do not clip; show full snippet (already sentence-based)
                             st.write(content)
+                            
+                            # Optional page display
+                            try:
+                                page = result.get('metadata', {}).get('page')
+                                if page is not None and str(page).strip():
+                                    st.caption(f"Page: {page}")
+                            except Exception:
+                                pass
                             
                             if result.get('url'):
                                 st.markdown(f"🔗 [View Source]({result['url']})")
+
+                            # Full context on demand
+                            try:
+                                full_ctx = result.get('metadata', {}).get('full_content')
+                                if full_ctx:
+                                    with st.expander("View full context", expanded=False):
+                                        st.write(full_ctx)
+                            except Exception:
+                                pass
                         
                         with col2:
                             st.metric("Relevance", f"{result.get('score', 0):.2f}")
@@ -3308,9 +3869,9 @@ def display_search_results(search_results, result_format):
                             st.write(f"**Type:** {result.get('type', 'Unknown')}")
                             
                             if result.get('title'):
-                                st.write(f"**Title:** {result['title']}")
+                                st.markdown("**Title:**<br>" + result['title'], unsafe_allow_html=True)
                             
-                            st.write(f"**Content:** {result.get('content', 'No content available')}")
+                            st.markdown("**Content:**<br>" + (result.get('content', 'No content available') or ''), unsafe_allow_html=True)
                             
                             if result.get('url'):
                                 st.markdown(f"🔗 [View Source]({result['url']})")

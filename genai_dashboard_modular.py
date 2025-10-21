@@ -8,6 +8,7 @@ import streamlit as st
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
+import pandas as pd
 
 # Import authentication components
 from app.auth.auth_ui import AuthUI
@@ -38,8 +39,8 @@ except Exception:
     pass
 
 if not os.getenv("OPENAI_API_KEY"):
-    st.error("OPENAI_API_KEY not found in .env file. Please set it and restart the app.")
-    st.stop()
+    # Do not stop the app; some providers (Ollama, others) may still be usable
+    st.warning("OPENAI_API_KEY not found. OpenAI models may be unavailable. Configure .env to enable them.")
 
 # Import simple vector manager (direct implementation)
 from utils.simple_vector_manager import get_simple_indexes, get_simple_vector_status
@@ -50,6 +51,171 @@ def get_unified_indexes(force_refresh=False):
 
 def get_vector_db_status():
     return get_simple_vector_status()
+
+# Global sidebar configuration panel
+def render_global_sidebar(available_indexes: list):
+    """Render the left sidebar with global configuration and status.
+    Includes comprehensive AI Model list (detected + full catalog),
+    knowledge base selection, backend selector, and basic settings.
+    Selections are stored in st.session_state for tabs to consume.
+    """
+    import streamlit as st
+    from itertools import chain
+    # Title and helper text
+    st.sidebar.header("Configuration")
+    st.sidebar.caption("Customize your AI assistant settings")
+
+    # Build AI model catalog
+    try:
+        from utils.llm_config import (
+            get_available_llm_models,
+            get_default_llm_model,
+            validate_llm_setup,
+        )
+        detected = get_available_llm_models() or []
+        default_model = get_default_llm_model() if detected else None
+    except Exception:
+        detected, default_model = [], None
+
+    # Full catalog regardless of API keys (names aligned with utils/llm_config)
+    full_catalog = [
+        # OpenAI
+        "OpenAI GPT-4", "OpenAI GPT-4 Turbo", "OpenAI GPT-3.5 Turbo",
+        # Anthropic
+        "Anthropic Claude 3 Opus", "Anthropic Claude 3 Sonnet", "Anthropic Claude 3 Haiku",
+        # Mistral
+        "Mistral Large", "Mistral Medium", "Mistral Small",
+        # DeepSeek
+        "DeepSeek Chat", "DeepSeek Coder",
+        # Groq (match LLMConfig display names)
+        "Llama 3 70B (Groq)", "Mixtral 8x7B (Groq)",
+        # Ollama local (match LLMConfig display names)
+        "Llama 3 8B (Ollama)", "Llama 3 70B (Ollama)", "Mistral 7B (Ollama)", "Phi-3 (Ollama)", "Code Llama (Ollama)",
+    ]
+
+    # Merge detected + full catalog, preserve order and uniqueness
+    combined = []
+    seen = set()
+    SENTINELS = {
+        "No LLM models available - Please check API keys in .env file",
+        "No models available",
+    }
+    for name in chain(detected, full_catalog):
+        if name and name not in seen and name not in SENTINELS:
+            seen.add(name)
+            combined.append(name)
+
+    # Choose default model (persist prior selection if any)
+    prior = st.session_state.get("global_model")
+    if prior and prior in combined:
+        default_model = prior
+    elif not default_model or default_model not in combined:
+        default_model = combined[0] if combined else "OpenAI GPT-4"
+
+    st.session_state["global_model"] = st.sidebar.selectbox(
+        "AI Model",
+        combined if combined else ["OpenAI GPT-4"],
+        index=(combined.index(default_model) if default_model in combined else 0),
+        key="sidebar_ai_model",
+    )
+
+    # Knowledge Base section
+    st.sidebar.subheader("Knowledge Base")
+    st.session_state["enable_document_kb"] = st.sidebar.toggle(
+        "Enable document knowledge",
+        value=st.session_state.get("enable_document_kb", True),
+        key="sidebar_enable_kb",
+    )
+
+    kb_value = None
+    if st.session_state["enable_document_kb"]:
+        # Merge Weaviate collections and local indexes
+        kb_options = []
+        try:
+            from utils.weaviate_manager import get_weaviate_manager
+            try:
+                wm = get_weaviate_manager()
+                colls = wm.list_collections() or []
+                kb_options.extend(colls)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        try:
+            if available_indexes:
+                for idx in available_indexes:
+                    if idx and idx not in kb_options:
+                        kb_options.append(idx)
+        except Exception:
+            pass
+        if not kb_options:
+            kb_options = ["default_faiss"]
+        kb_value = st.sidebar.selectbox(
+            "Choose source",
+            kb_options,
+            key="sidebar_kb_selector",
+            help="Select a Weaviate collection or local FAISS index",
+        )
+    st.session_state["global_kb"] = kb_value
+
+    # Search backend selector
+    st.sidebar.subheader("Search Backend")
+    backend_options = ["Weaviate (Cloud Vector DB)", "FAISS (Local Index)", "Both"]
+    default_backend_idx = 1
+    try:
+        import weaviate  # noqa: F401
+        default_backend_idx = 0
+    except Exception:
+        default_backend_idx = 1
+    st.session_state["global_backend"] = st.sidebar.selectbox(
+        "Backend",
+        backend_options,
+        index=default_backend_idx,
+        key="sidebar_backend_selector",
+    )
+
+    # General settings
+    st.sidebar.subheader("Settings")
+    st.session_state["conversation_memory"] = st.sidebar.toggle(
+        "Conversation memory",
+        value=st.session_state.get("conversation_memory", True),
+        key="sidebar_conv_memory",
+    )
+    st.session_state["ui_mode"] = st.sidebar.selectbox(
+        "Mode",
+        ["Advanced", "Basic"],
+        index=0 if st.session_state.get("ui_mode", "Advanced") == "Advanced" else 1,
+        key="sidebar_ui_mode",
+    )
+
+    # System Status
+    st.sidebar.subheader("System Status")
+    # LLM status
+    try:
+        from utils.llm_config import validate_llm_setup as _validate
+        ok, msg = _validate(st.session_state["global_model"])  # type: ignore[arg-type]
+        if ok:
+            st.sidebar.success(f"LLM: {msg}")
+        else:
+            st.sidebar.warning(f"LLM: {msg}")
+    except Exception:
+        st.sidebar.info("LLM status unavailable")
+
+    # Vector DB status
+    try:
+        status, message = get_vector_db_status()
+        if status == "Ready":
+            st.sidebar.success(message)
+        else:
+            st.sidebar.error(message)
+    except Exception:
+        st.sidebar.info("Vector DB status unavailable")
+
+    # Mark that the global sidebar has been rendered to avoid duplicates from tabs
+    try:
+        st.session_state["_global_sidebar_rendered"] = True
+    except Exception:
+        pass
 
 # Import tab modules
 from tabs import (
@@ -88,10 +254,6 @@ try:
 except Exception:
     pass
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 # Page configuration
 st.set_page_config(
     page_title="VaultMind GenAI Knowledge Assistant",
@@ -99,6 +261,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Custom CSS for better styling
 st.markdown("""
@@ -200,6 +366,13 @@ available_indexes = get_unified_indexes(force_refresh=force_refresh)
 # Define INDEX_ROOT for compatibility with legacy functions
 INDEX_ROOT = PROJECT_ROOT / "data" / "indexes"
 
+# Render global sidebar (left panel) with configuration/status
+try:
+    render_global_sidebar(available_indexes)
+except Exception:
+    # Fail gracefully; tabs will still render
+    pass
+
 # Tab configuration based on user role
 # Allow exposing Weaviate Settings to all via env flag
 WV_SETTINGS_FOR_ALL = os.getenv("WEAVIATE_SETTINGS_FOR_ALL", "false").lower() in ("1", "true", "yes")
@@ -293,18 +466,28 @@ if available_tabs:
                     render_multi_content_enhanced(user, permissions, auth_middleware, available_indexes or [])
                 except Exception as e2:
                     st.error(f"Both enhanced and fallback failed: {str(e2)}")
-                    # Last resort - show basic functionality
+                    # Last resort - show basic functionality (avoid duplicate keys)
                     st.header("🌐 Multi-Content Dashboard")
                     st.markdown("**Basic Excel functionality available**")
-                    from tabs.multi_content_enhanced import render_excel_tab
-                    render_excel_tab()
+                    uploaded = st.file_uploader(
+                        "📁 Upload Excel File",
+                        type=["xlsx", "xls"],
+                        key="excel_basic_uploader",
+                        help="Upload a small Excel file to preview"
+                    )
+                    if uploaded is not None:
+                        try:
+                            sheets = pd.read_excel(uploaded, sheet_name=None, engine="openpyxl")
+                            sheet_names = list(sheets.keys()) or ["Sheet1"]
+                            sel = st.selectbox(
+                                "Select sheet",
+                                options=sheet_names,
+                                key="excel_basic_sheet_select"
+                            )
+                            st.dataframe(sheets.get(sel), use_container_width=True)
+                        except Exception as _excel_err:
+                            st.error(f"Excel preview failed: {_excel_err}")
                 logger.error(f"Failed to render Enhanced Multi-Content tab: {str(e)}")
-    if "tool_requests" in tab_dict:
-        with tab_dict["tool_requests"]:
-            render_tool_requests(user, permissions, auth_middleware)
-    if "permissions" in tab_dict:
-        with tab_dict["permissions"]:
-            render_user_permissions_tab(user_dict, permissions, auth_middleware)
     if "storage_settings" in tab_dict:
         with tab_dict["storage_settings"]:
             render_storage_settings(form_key_prefix="storage_settings_top")

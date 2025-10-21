@@ -6,7 +6,6 @@ Enhanced document ingestion with dual backend support (Weaviate + FAISS)
 
 import streamlit as st
 import os
-from pathlib import Path
 import logging
 from datetime import datetime
 import time
@@ -15,8 +14,17 @@ import pickle
 import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
+import io
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Optional PDF page counter
+try:
+    from PyPDF2 import PdfReader
+    PDF_READER_AVAILABLE = True
+except Exception:
+    PDF_READER_AVAILABLE = False
 
 # Import Weaviate components with fallback
 try:
@@ -43,7 +51,6 @@ def render_document_ingestion(user, permissions, auth_middleware, available_inde
     
     # Log user action
     auth_middleware.log_user_action("ACCESS_DOCUMENT_INGESTION")
-    
     st.info("🔧 Updated version - Index validation fixed")
     
     # Get current user info
@@ -145,10 +152,13 @@ def render_weaviate_ingestion(username):
     
     # Source type selection
     st.subheader("📥 Document Source")
-    source_type = st.selectbox(
+    source_type = st.radio(
         "Select Source Type:",
         ["PDF File", "Text File", "Website URL"],
-        key="weaviate_ingest_source_type"
+        index=0,
+        horizontal=True,
+        key="weaviate_ingest_source_type",
+        help="Choose the content source. 'Website URL' will scrape and index web content."
     )
     
     # Chunking configuration
@@ -444,10 +454,13 @@ def render_faiss_ingestion(username):
     
     # Source type selection
     st.subheader("📥 Document Source")
-    source_type = st.selectbox(
+    source_type = st.radio(
         "Select Source Type:",
         ["PDF File", "Text File", "Website URL"],
-        key="faiss_ingest_source_type"
+        index=0,
+        horizontal=True,
+        key="faiss_ingest_source_type",
+        help="Choose the content source. 'Website URL' will scrape and index web content."
     )
     
     # Chunking configuration
@@ -501,6 +514,7 @@ def render_faiss_ingestion(username):
                     )
                 
                 # Process documents
+                page_count = None  # will be set for PDFs if available
                 if source_type == "PDF File" and uploaded_file:
                     status_text.text("📄 Processing PDF...")
                     
@@ -514,6 +528,13 @@ def render_faiss_ingestion(username):
                         from utils.robust_pdf_extractor import extract_text_from_pdf_robust, validate_extraction_quality
                         
                         pdf_bytes = uploaded_file.getvalue()
+                        # Try to count PDF pages if library is available
+                        if PDF_READER_AVAILABLE:
+                            try:
+                                reader = PdfReader(io.BytesIO(pdf_bytes))
+                                page_count = len(reader.pages)
+                            except Exception:
+                                page_count = None
                         text_content, method = extract_text_from_pdf_robust(pdf_bytes, uploaded_file.name)
                         
                         if text_content:
@@ -578,10 +599,41 @@ def render_faiss_ingestion(username):
                         f.write(f"URL: {url_input}\nRender JS: {render_js}\nDepth: {max_depth}")
                     progress_bar.progress(30)
                     
-                    # Create placeholder content
-                    placeholder_content = f"Website content from {url_input}\nProcessed with depth {max_depth}"
-                    with open(index_dir / "extracted_content.txt", "w", encoding="utf-8") as f:
-                        f.write(placeholder_content)
+                    # Try to fetch content from URL
+                    try:
+                        import requests
+                        from bs4 import BeautifulSoup
+                        
+                        resp = requests.get(url_input, timeout=15)
+                        resp.raise_for_status()
+                        soup = BeautifulSoup(resp.content, 'html.parser')
+                        text = soup.get_text(separator='\n', strip=True) or ""
+                        
+                        # Save raw HTML and extracted text
+                        with open(index_dir / "raw_html.html", "w", encoding="utf-8") as f:
+                            f.write(str(soup))
+                        with open(index_dir / "extracted_content.txt", "w", encoding="utf-8") as f:
+                            f.write(text)
+                        with open(index_dir / "extracted_text.txt", "w", encoding="utf-8") as f:
+                            f.write(text)
+                        
+                        # Create chunk files for reference (limit to 10)
+                        step = max(1, chunk_size - chunk_overlap)
+                        chunk_count = 0
+                        for i in range(0, len(text), step):
+                            if chunk_count >= 10:
+                                break
+                            chunk = text[i:i+chunk_size]
+                            if not chunk:
+                                break
+                            with open(index_dir / f"chunk_{chunk_count+1}.txt", "w", encoding="utf-8") as f:
+                                f.write(chunk)
+                            chunk_count += 1
+                    except Exception as e:
+                        st.warning(f"Error fetching URL content: {e}")
+                        # Fallback minimal content
+                        with open(index_dir / "extracted_content.txt", "w", encoding="utf-8") as f:
+                            f.write(f"Website content placeholder for {url_input}")
                 
                 # Build FAISS index so Query/Chat/Agent tabs can discover it
                 # Find a text file to embed
@@ -619,6 +671,10 @@ def render_faiss_ingestion(username):
                     chunk = text_to_embed[i : i + chunk_size]
                     if chunk:
                         chunks.append(chunk)
+                # Compute ingestion metrics
+                total_chunks = len(chunks)
+                total_chars = len(text_to_embed)
+                approx_tokens = total_chars // 4  # rough heuristic
                 model = SentenceTransformer("all-MiniLM-L6-v2")
                 embs = model.encode(
                     chunks,
@@ -663,6 +719,10 @@ def render_faiss_ingestion(username):
                 **Location:** {index_dir}
                 **FAISS Vectors:** data/faiss_index/{index_name}
                 **Embedding Engine:** SentenceTransformer (all-MiniLM-L6-v2)
+                **Pages (PDF):** {page_count if page_count is not None else 'N/A'}
+                **Chunks Created:** {total_chunks}
+                **Characters:** {total_chars}
+                **~Tokens (est.):** {approx_tokens}
                 **Created:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 """
                 )

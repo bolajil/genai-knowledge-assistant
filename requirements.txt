@@ -8,7 +8,9 @@ langchain-community
 langchain-experimental
 faiss-cpu
 pandas
+plotly>=5.17.0
 sentence-transformers
+weaviate-client[grpc]>=4.4.0,<5
 pypdf
 duckduckgo-search
 googlesearch-python

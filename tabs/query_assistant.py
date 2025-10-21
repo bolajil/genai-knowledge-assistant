@@ -19,10 +19,25 @@ from sentence_transformers import SentenceTransformer
 import re
 from utils.web_search import run_web_search
 
+# P0 Security Imports
+from utils.security import validate_search_query, validate_collection_name, validate_top_k, check_rate_limit
+from utils.query_cache import get_cached_result, cache_query_result, get_cache_stats
+
 logger = logging.getLogger(__name__)
 
 # Import feedback system components
 from utils.feedback_ui_components import render_feedback_buttons, render_query_insights, initialize_feedback_ui
+
+# Import Query Improvements
+from utils.query_result_formatter import QueryResultFormatter
+from utils.query_expansion import QueryExpander
+
+# Text cleaning helpers
+from utils.text_cleaning import clean_document_text, is_noise_text
+
+# Cache controls
+from utils.query_cache import invalidate_query_cache
+
 # Import Weaviate collection selector
 try:
     from utils.weaviate_collection_selector import render_collection_selector, render_backend_selector
@@ -31,6 +46,21 @@ except ImportError:
     WEAVIATE_UI_AVAILABLE = False
     def render_backend_selector(key="backend"):
         return "FAISS (Local Index)"
+    
+    def render_collection_selector(key="collection", label="Select Collection", help_text="", include_all_option=False):
+        """Fallback collection selector when weaviate_collection_selector is not available"""
+        try:
+            from utils.weaviate_manager import get_weaviate_manager
+            wm = get_weaviate_manager()
+            collections = wm.list_collections() or []
+            if collections:
+                return st.selectbox(label, collections, key=key, help=help_text)
+            else:
+                st.warning("No Weaviate collections found")
+                return None
+        except Exception as e:
+            st.error(f"Could not load Weaviate collections: {e}")
+            return None
 
 def _get_fallback_results(query: str, top_k: int) -> List[Dict[str, str]]:
     """Fallback results when primary search fails"""
@@ -82,7 +112,7 @@ def _normalize_content_from_result(r, default_source: str = "") -> Dict[str, str
     """
     try:
         if isinstance(r, dict):
-            content = (
+            raw_content = (
                 r.get('content')
                 or r.get('text')
                 or r.get('page_content')
@@ -90,21 +120,149 @@ def _normalize_content_from_result(r, default_source: str = "") -> Dict[str, str
                 or r.get('chunk')
                 or str(r)
             )
-            src = r.get('source') or r.get('file_path') or default_source or "Unknown"
+            # Clean and filter noise early
+            content = clean_document_text(str(raw_content or ""))
+            if content and is_noise_text(content):
+                content = ""
+            # Normalize source: strip any trailing " - Page X" to avoid duplicate page labels
+            src_raw = r.get('source') or r.get('file_path') or default_source or "Unknown"
+            try:
+                src = re.sub(r"\s*-\s*Page\s*\d+\b", "", str(src_raw), flags=re.IGNORECASE).strip()
+            except Exception:
+                src = str(src_raw)
             page = r.get('page') or r.get('page_number')
+            # Normalize page to numeric or None
+            if not (isinstance(page, int) or (isinstance(page, str) and page.isdigit())):
+                page = None
             section = r.get('section') or r.get('heading')
+            # Normalize relevance score to [0,1] when possible
             score = r.get('relevance_score') or r.get('score') or 0.0
+            try:
+                s = float(score)
+                if s > 1.0:
+                    # Treat common percent-style values
+                    s = s / 100.0 if s <= 100.0 else min(1.0, s / 100.0)
+                if s < 0.0:
+                    s = 0.0
+            except Exception:
+                s = 0.0
             return {
-                "content": str(content or ""),
+                "content": content,
                 "source": str(src or "Unknown"),
                 "page": page,
                 "section": section,
-                "relevance_score": float(score) if isinstance(score, (int, float)) else 0.0,
+                "relevance_score": s,
             }
         else:
             return {"content": str(r), "source": default_source or "Unknown", "relevance_score": 0.0}
     except Exception:
         return {"content": str(r), "source": default_source or "Unknown", "relevance_score": 0.0}
+
+def _sanitize_ai_markdown(md: str) -> str:
+    """Post-process AI markdown to strip TOC/heading-only noise, dotted leaders, and placeholder pages.
+
+    Keeps section headers like '### Executive Summary', '### Detailed Answer', '### Key Points', '### Information Gaps'.
+    """
+    if not md or not isinstance(md, str):
+        return md
+    try:
+        # Remove explicit 'Page N/A' placeholders anywhere
+        md = re.sub(r"\bPage\s*N/?A\b", "", md, flags=re.IGNORECASE)
+
+        keep_headers = {
+            '### executive summary',
+            '### detailed answer',
+            '### key points',
+            '### information gaps',
+        }
+
+        lines = md.split('\n')
+        cleaned_lines: List[str] = []
+        seen_norm = set()
+
+        # Simple verb regex (matches common legal/procedural verbs)
+        verb_re = re.compile(r"\b(is|are|shall|must|may|will|has|have|does|do|provide|provides|include|includes|appoint|appoints|elect|elects|vote|votes|conduct|conducts|comply|complies|adopt|adopts|keep|keeps|record|records|preside|presides|delegate|delegates|authorize|authorizes|determine|determines|manage|manages)\b", re.IGNORECASE)
+
+        for raw in lines:
+            line = raw.strip()
+            if not line:
+                cleaned_lines.append("")
+                continue
+
+            low = line.lower()
+            # Normalize plain section titles to markdown headers
+            plain_headers = {
+                'executive summary': '### Executive Summary',
+                'detailed answer': '### Detailed Answer',
+                'key points': '### Key Points',
+                'information gaps': '### Information Gaps',
+            }
+            if low in plain_headers:
+                cleaned_lines.append(plain_headers[low])
+                continue
+
+            # Rewrite 'From <src>:' prefixes to 'According to <src>, '
+            try:
+                line = re.sub(r'^(from)\s+([^:]+):\s*', r'According to \2, ', line, flags=re.IGNORECASE)
+            except Exception:
+                pass
+            # Always keep section headers we expect from the model
+            if low in keep_headers or low.startswith('## '):
+                cleaned_lines.append(line)
+                continue
+
+            # Drop obvious noise
+            if is_noise_text(line):
+                continue
+            # Drop dotted leader patterns (TOC)
+            if re.search(r"\.{3,}\s*\d+$", line):
+                continue
+            # Drop pure 'Source:' lines just in case
+            if low.startswith('source:'):
+                continue
+            # Drop continuation-looking lines that start with lowercase (not bullets or numbered)
+            if re.match(r"^[a-z]", line) and not re.match(r"^[\-\*\d\)\(]+", line):
+                continue
+            # Drop lines that look like continuations (start with modal/aux)
+            if re.match(r"^(must|shall|should|may|will|has|have|does|do|is|are|and|or|including|such as|e\.g\.)\b", low):
+                continue
+            # Drop lines that end with ':' and lack verbs (likely list-intros)
+            if line.endswith(':') and (not verb_re.search(line)):
+                continue
+            # Drop ALL-CAPS-ish headings
+            if (not any(c.islower() for c in line)) and any(c.isupper() for c in line):
+                # keep short acronyms, drop multi-word caps
+                if len(line.split()) >= 2:
+                    continue
+            # Drop short title-like lines without verbs (e.g., headings such as 'Quorum of Board of Directors.')
+            if (len(line.split()) <= 8) and (not verb_re.search(line)):
+                continue
+            # If a bullet or numbered item is entirely heading-like, drop it
+            bullet = re.sub(r"^[\-\*\d\.)\(\s]+", "", line)
+            if bullet and len(bullet.split()) <= 8 and (not verb_re.search(bullet)) and is_noise_text(bullet):
+                continue
+            # Deduplicate near-identical lines
+            norm = re.sub(r"\W+", " ", line).strip().lower()
+            if norm in seen_norm and norm:
+                continue
+            seen_norm.add(norm)
+            cleaned_lines.append(line)
+
+        # Remove consecutive blank lines
+        out: List[str] = []
+        blank = 0
+        for l in cleaned_lines:
+            if l.strip() == "":
+                blank += 1
+                if blank > 1:
+                    continue
+            else:
+                blank = 0
+            out.append(l)
+
+        return '\n'.join(out).strip()
+    except Exception:
+        return md
 
 def _is_weaviate_authorized() -> bool:
     """Cache and return whether Weaviate responds on readiness/schema endpoints.
@@ -565,12 +723,37 @@ def render_query_assistant(user=None, permissions=None, auth_middleware=None, av
                     selected_backend = "faiss"
                 # Enterprise hybrid re-ranking toggle (applies when local data available)
                 st.checkbox("Use enterprise hybrid re-ranking (local merge)", value=True, key="qa_quick_enterprise")
+                st.markdown("---")
+                # Toggle: Merge page-based retrieval
+                st.checkbox("Merge page-based retrieval (page-aware)", value=True, key="qa_quick_page_merge")
+                colc1, colc2 = st.columns([1,1])
+                with colc1:
+                    st.checkbox("Force refresh (ignore cache)", value=False, key="qa_quick_force")
+                with colc2:
+                    if st.button("Clear query cache", key="qa_quick_clear_cache"):
+                        try:
+                            invalidate_query_cache()
+                            st.success("Cache cleared.")
+                        except Exception as e:
+                            st.warning(f"Could not clear cache: {e}")
             
             go_btn = st.button("Get Answer", use_container_width=True, key="qa_quick_search")
             if go_btn:
-                if not q_query or len(q_query.strip()) < 3:
-                    st.warning("Please enter a query with at least 3 characters")
-                elif not kb_name or not str(kb_name).strip():
+                # P0 Security: Input Validation
+                valid_query, error_msg, sanitized_query = validate_search_query(q_query)
+                if not valid_query:
+                    st.error(f"❌ Invalid query: {error_msg}")
+                    return
+
+                # P0 Security: Rate Limiting
+                user_id = username or "anonymous"
+                allowed, rate_error, rate_info = check_rate_limit(user_id, tier="premium", operation="query")
+                if not allowed:
+                    st.error(f"⚠️ {rate_error}")
+                    st.info(f"Rate limit info: {rate_info.get('minute_remaining', 0)} queries remaining this minute")
+                    return
+
+                if not kb_name or not str(kb_name).strip():
                     st.warning("Please select a knowledge base (collection/index) first")
                 else:
                     # NEW: ML Intent Classification
@@ -601,47 +784,88 @@ def render_query_assistant(user=None, permissions=None, auth_middleware=None, av
                     
                     with st.spinner("Searching knowledge base and generating answer..."):
                         try:
-                            results_quick = []
-                            if selected_backend == "weaviate":
-                                # Ensure query vectorization settings are applied if needed
-                                try:
-                                    quick_localq = st.session_state.get("qa_quick_localq", True)
-                                    quick_model = st.session_state.get("qa_quick_model", os.getenv("WEAVIATE_QUERY_MODEL_NAME") or os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2"))
-                                    os.environ["WEAVIATE_USE_CLIENT_VECTORS"] = "true" if quick_localq else "false"
-                                    os.environ["WEAVIATE_QUERY_MODEL_NAME"] = quick_model
-                                except Exception:
-                                    pass
-                                wm_inst = wm_quick if 'wm_quick' in locals() else __import__('utils.weaviate_manager', fromlist=['get_weaviate_manager']).get_weaviate_manager()
-                                # Primary retrieval
-                                results_quick = wm_inst.get_documents_for_tab(
-                                    collection_name=kb_name,
-                                    tab_name="query_assistant",
-                                    query=q_query,
-                                    limit=q_topk
-                                )
-                                # Unified robust fallback: variations + normalization + dedupe
-                                if not results_quick:
-                                    results_quick = _quick_weaviate_search(wm_inst, kb_name, q_query, q_topk)
-                                # Automatic near_vector toggle attempt if still empty
-                                if not results_quick:
+                            # Check cache first for Quick Search
+                            cache_key = f"{q_query}|{kb_name}|{selected_backend}|{q_topk}|{username or 'anonymous'}"
+                            force_refresh = st.session_state.get("qa_quick_force", False)
+                            cached_result = None if force_refresh else get_cached_result(q_query, kb_name, selected_backend, q_topk, username or "anonymous")
+
+                            if cached_result:
+                                st.info("⚡ Using cached results for faster response")
+                                results_quick = cached_result.get("results", [])
+                                summary_text = cached_result.get("summary", "")
+                            else:
+                                results_quick = []
+                                if selected_backend == "weaviate":
+                                    # Ensure query vectorization settings are applied if needed
                                     try:
-                                        orig_localq_env = os.getenv("WEAVIATE_USE_CLIENT_VECTORS")
-                                        # Flip local query vectorization once and retry
-                                        flipped = not quick_localq
-                                        os.environ["WEAVIATE_USE_CLIENT_VECTORS"] = "true" if flipped else "false"
-                                        results_quick = _quick_weaviate_search(wm_inst, kb_name, q_query, q_topk)
-                                        # Restore original env setting
-                                        if orig_localq_env is not None:
-                                            os.environ["WEAVIATE_USE_CLIENT_VECTORS"] = orig_localq_env
+                                        quick_localq = st.session_state.get("qa_quick_localq", True)
+                                        quick_model = st.session_state.get("qa_quick_model", os.getenv("WEAVIATE_QUERY_MODEL_NAME") or os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2"))
+                                        os.environ["WEAVIATE_USE_CLIENT_VECTORS"] = "true" if quick_localq else "false"
+                                        os.environ["WEAVIATE_QUERY_MODEL_NAME"] = quick_model
                                     except Exception:
                                         pass
-                            else:
-                                # Ensure local FAISS provider is available in this scope
+                                    wm_inst = wm_quick if 'wm_quick' in locals() else __import__('utils.weaviate_manager', fromlist=['get_weaviate_manager']).get_weaviate_manager()
+                                    # Primary retrieval
+                                    results_quick = wm_inst.get_documents_for_tab(
+                                        collection_name=kb_name,
+                                        tab_name="query_assistant",
+                                        query=q_query,
+                                        limit=q_topk
+                                    )
+                                    # Unified robust fallback: variations + normalization + dedupe
+                                    if not results_quick:
+                                        results_quick = _quick_weaviate_search(wm_inst, kb_name, q_query, q_topk)
+                                    # Automatic near_vector toggle attempt if still empty
+                                    if not results_quick:
+                                        try:
+                                            orig_localq_env = os.getenv("WEAVIATE_USE_CLIENT_VECTORS")
+                                            # Flip local query vectorization once and retry
+                                            flipped = not quick_localq
+                                            os.environ["WEAVIATE_USE_CLIENT_VECTORS"] = "true" if flipped else "false"
+                                            results_quick = _quick_weaviate_search(wm_inst, kb_name, q_query, q_topk)
+                                            # Restore original env setting
+                                            if orig_localq_env is not None:
+                                                os.environ["WEAVIATE_USE_CLIENT_VECTORS"] = orig_localq_env
+                                        except Exception:
+                                            pass
+                                else:
+                                    # Ensure local FAISS provider is available in this scope
+                                    try:
+                                        vdb_inst = vdb_quick if 'vdb_quick' in locals() else get_vector_db_provider()
+                                    except Exception:
+                                        vdb_inst = get_vector_db_provider()
+                                    results_quick = vdb_inst.search_index(query=q_query, index_name=kb_name, top_k=q_topk)
+
+                                # Normalize and filter results prior to LLM summarization
                                 try:
-                                    vdb_inst = vdb_quick if 'vdb_quick' in locals() else get_vector_db_provider()
+                                    results_quick = [_normalize_content_from_result(r, kb_name) for r in (results_quick or [])]
+                                    results_quick = [r for r in results_quick if r.get('content') and len(r.get('content').strip()) > 0]
                                 except Exception:
-                                    vdb_inst = get_vector_db_provider()
-                                results_quick = vdb_inst.search_index(query=q_query, index_name=kb_name, top_k=q_topk)
+                                    pass
+
+                                # Enterprise hybrid search re-ranking/merge (before AI Answer)
+                                try:
+                                    if st.session_state.get("qa_quick_enterprise", True):
+                                        from utils.enterprise_hybrid_search import get_enterprise_hybrid_search
+                                        eh = get_enterprise_hybrid_search()
+                                        eh_res = eh.search(q_query, kb_name, max_results=q_topk) or []
+                                        if eh_res:
+                                            eh_norm = [_normalize_content_from_result(r, kb_name) for r in eh_res]
+                                            results_quick = _dedupe_results((results_quick or []) + eh_norm)[:q_topk]
+                                except Exception:
+                                    pass
+
+                                # Page-based retrieval merge (before AI Answer)
+                                try:
+                                    if st.session_state.get("qa_quick_page_merge", False):
+                                        from utils.enhanced_page_chunking import EnhancedPageChunkingRetrieval
+                                        pbr = EnhancedPageChunkingRetrieval()
+                                        pbr_res = pbr.retrieve_with_page_chunks(q_query, kb_name, max_results=q_topk) or []
+                                        if pbr_res:
+                                            pbr_norm = [_normalize_content_from_result(r, kb_name) for r in pbr_res]
+                                            results_quick = _dedupe_results((results_quick or []) + pbr_norm)[:q_topk]
+                                except Exception:
+                                    pass
                             
                             # NEW: ML Intent Classification - Show before AI Answer
                             try:
@@ -675,60 +899,331 @@ def render_query_assistant(user=None, permissions=None, auth_middleware=None, av
                             
                             # Generate enterprise-style summary using an enhanced LLM call
                             st.markdown("## 🧠 AI Answer")
+                            
+                            # Debug: Check LLM availability (os already imported at top)
+                            openai_key = os.getenv("OPENAI_API_KEY")
+                            anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+                            
+                            if not openai_key and not anthropic_key:
+                                st.error("⚠️ **LLM API Key Not Configured!**")
+                                st.warning("Please add OPENAI_API_KEY or ANTHROPIC_API_KEY to your .env file to get AI-generated answers.")
+                                st.info("Currently showing raw retrieval results as fallback.")
+                            
                             try:
-                                from utils.enhanced_llm_integration import process_query_with_enhanced_llm
-                                summary = process_query_with_enhanced_llm(q_query, results_quick, kb_name)
+                                # Use EnhancedLLMProcessor for proper LLM integration
+                                from utils.enhanced_llm_integration import EnhancedLLMProcessor
+                                llm_processor = EnhancedLLMProcessor()
+                                
+                                # Check if LLM is available
+                                if not llm_processor.available:
+                                    st.warning("⚠️ LLM not available - check API keys in .env file")
+                                    raise ValueError("LLM not available")
+                                
+                                # Show processing indicator
+                                with st.spinner("🤖 Generating AI answer with LLM..."):
+                                    # Process with LLM
+                                    summary = llm_processor.process_retrieval_results(
+                                        query=q_query,
+                                        retrieval_results=results_quick,
+                                        index_name=kb_name
+                                    )
+                                
                                 summary_text = summary.get("result", "")
-                                st.markdown(summary_text)
-
-                                # Display sources from the summary if available
-                                if summary.get("sources"):
-                                    with st.expander("📚 Sources Used by AI"):
-                                        for source in summary.get("sources", []):
-                                            st.info(f"{source.get('source', 'Unknown')}, Page: {source.get('page', 'N/A')}")
+                                processing_method = summary.get("processing_method", "unknown")
+                                
+                                # Show LLM model info
+                                try:
+                                    from utils.llm_config import get_default_llm_model
+                                    current_model = get_default_llm_model()
+                                    st.caption(f"🤖 **Model**: {current_model} | **Method**: {processing_method}")
+                                except:
+                                    st.caption(f"**Processing Method**: {processing_method}")
+                                
+                                # Debug info
+                                if processing_method == "fallback_enhanced":
+                                    st.warning("⚠️ Using fallback mode - LLM call failed")
+                                
+                                # Sanitize AI markdown to remove TOC/heading-only noise
+                                summary_text = _sanitize_ai_markdown(summary_text)
+                                
+                                # Check if we got a valid response
+                                if summary_text and len(summary_text.strip()) > 100:
+                                    st.markdown(summary_text)
+                                    
+                                    # Display sources from the summary if available
+                                    if summary.get("sources"):
+                                        with st.expander("📚 Sources Used by AI"):
+                                            for source in summary.get("sources", []):
+                                                src = source.get('source', 'Unknown')
+                                                page = source.get('page')
+                                                page_seg = f", Page: {page}" if (isinstance(page, int) or (isinstance(page, str) and page.isdigit())) else ""
+                                                st.info(f"{src}{page_seg}")
+                                else:
+                                    # Response was empty or too short - use enhanced fallback
+                                    logger.warning(f"LLM response too short ({len(summary_text)} chars), using fallback")
+                                    st.warning(f"⚠️ LLM response too short ({len(summary_text)} chars)")
+                                    raise ValueError("LLM response was empty or insufficient")
 
                             except Exception as e:
-                                logger.error(f"Enhanced LLM integration failed: {e}. Falling back to basic summary.")
-                                # Fallback: simple stitched summary
-                                st.markdown("_(AI summary failed. Showing raw results.)_")
-                                summary_text = "\n\n---\n\n".join((r.get('content', str(r)) if isinstance(r, dict) else str(r)) for r in results_quick)
-                                st.markdown(summary_text[:4000] + ("..." if len(summary_text) > 4000 else ""))
+                                logger.error(f"Enhanced LLM integration failed: {e}. Using enterprise fallback formatting.")
+                                # Enhanced fallback with proper enterprise structure
+                                fallback_parts = []
+                                # Verb regex for sentence validity
+                                verb_re = re.compile(r"\b(is|are|shall|must|may|will|has|have|does|do|provide|provides|include|includes|appoint|appoints|elect|elects|vote|votes|conduct|conducts|comply|complies|adopt|adopts|keep|keeps|record|records|preside|presides|delegate|delegates|authorize|authorizes|determine|determines|manage|manages)\b", re.IGNORECASE)
+                                
+                                # Executive Summary
+                                fallback_parts.append("### Executive Summary")
+                                if results_quick:
+                                    top_content = clean_document_text(results_quick[0].get('content', '') or '')
+                                    # Robust sentence splitting and filtering to avoid truncated fragments
+                                    candidates = [s.strip() for s in re.split(r'(?<=[.!?])\s+', top_content) if s.strip()]
+                                    sentences = []
+                                    for s in candidates:
+                                        sl = s.lower()
+                                        if len(s) < 25:
+                                            continue
+                                        if re.match(r'^(must|shall|should|may|will|has|have|does|do|is|are|and|or)\b', sl):
+                                            continue
+                                        if s.endswith(':'):
+                                            continue
+                                        if is_noise_text(s):
+                                            continue
+                                        if not s[:1].isupper():
+                                            continue
+                                        if not verb_re.search(s):
+                                            continue
+                                        sentences.append(s)
+                                    summary_text = '. '.join(sentences[:2]) + ('.' if sentences[:2] else '')
+                                    if not summary_text:
+                                        summary_text = "Information found in documents."
+                                    fallback_parts.append(summary_text)
+                                else:
+                                    fallback_parts.append("No relevant information found.")
+                                fallback_parts.append("")
+                                
+                                # Detailed Answer
+                                fallback_parts.append("### Detailed Answer")
+                                for i, result in enumerate(results_quick[:3], 1):
+                                    content = clean_document_text(result.get('content', '') or '')
+                                    if not content or is_noise_text(content):
+                                        continue
+                                    source = result.get('source', 'Unknown')
+                                    page = result.get('page')
+                                    page_seg = f" (Page {page})" if (isinstance(page, int) or (isinstance(page, str) and page.isdigit())) else ""
+                                    
+                                    # Robust sentence splitting and filtering
+                                    cand = [s.strip() for s in re.split(r'(?<=[.!?])\s+', content) if s.strip()]
+                                    sentences = []
+                                    for s in cand:
+                                        sl = s.lower()
+                                        if len(s) < 25:
+                                            continue
+                                        if re.match(r'^(must|shall|should|may|will|has|have|does|do|is|are|and|or)\b', sl):
+                                            continue
+                                        if s.endswith(':'):
+                                            continue
+                                        if is_noise_text(s):
+                                            continue
+                                        if not s[:1].isupper():
+                                            continue
+                                        if not verb_re.search(s):
+                                            continue
+                                        sentences.append(s)
+                                    if sentences:
+                                        excerpt = ' '.join(sentences[:3])
+                                        if sentences[:3] and not sentences[:3][-1].endswith(('.', '!', '?')):
+                                            excerpt += '.'
+                                        fallback_parts.append(f"**From {source}{page_seg}:** {excerpt}")
+                                        fallback_parts.append("")
+                                
+                                # Key Points - Using QueryResultFormatter for complete sentences
+                                fallback_parts.append("### Key Points")
+                                for i, result in enumerate(results_quick[:5], 1):
+                                    content = result.get('content', '')
+                                    source = result.get('source', 'Unknown')
+                                    page = result.get('page')
+                                    section = result.get('section')
+                                    
+                                    # Use QueryResultFormatter to get complete sentences with proper formatting
+                                    formatted_point = QueryResultFormatter.format_key_point(
+                                        content=content,
+                                        source=source,
+                                        page=page,
+                                        section=section,
+                                        index=i
+                                    )
+                                    # Drop if the formatter returned a fragment (starts with modal/aux or ends with ':')
+                                    if formatted_point:
+                                        fp = formatted_point.strip()
+                                        if re.match(r'^\-\s*(must|shall|should|may|will|has|have|does|do|is|are)\b', fp, flags=re.IGNORECASE):
+                                            formatted_point = ''
+                                        if fp.endswith(':'):
+                                            formatted_point = ''
+                                    if formatted_point:
+                                        fallback_parts.append(formatted_point)
+                                
+                                summary_text = "\n".join(fallback_parts)
+                                # Final sanitization pass
+                                summary_text = _sanitize_ai_markdown(summary_text)
+                                st.markdown(summary_text)
                             
-                            # Enterprise hybrid search re-ranking/merge (if enabled and local data present)
-                            try:
-                                if st.session_state.get("qa_quick_enterprise", True):
-                                    from utils.enterprise_hybrid_search import get_enterprise_hybrid_search
-                                    eh = get_enterprise_hybrid_search()
-                                    eh_res = eh.search(q_query, kb_name, max_results=q_topk) or []
-                                    if eh_res:
-                                        eh_norm = [{
-                                            'content': r.content,
-                                            'source': r.source,
-                                            'page': r.page,
-                                            'section': r.section,
-                                            'relevance_score': getattr(r, 'final_score', 0.0),
-                                            'backend': 'EnterpriseHybrid',
-                                            'index_source': kb_name,
-                                        } for r in eh_res]
-                                        base_norm = [_normalize_content_from_result(r, kb_name) for r in (results_quick or [])]
-                                        results_quick = _dedupe_results(base_norm + eh_norm)[:q_topk]
-                            except Exception:
-                                pass
-                            
-                            # Sources
+                            # Sources - Clean and professional display
                             if results_quick:
                                 st.markdown("### 📚 Sources")
-                                for r in results_quick:
+                                for idx, r in enumerate(results_quick, 1):
                                     if isinstance(r, dict):
                                         src = r.get('source') or r.get('file_path') or kb_name
                                         page = r.get('page')
-                                        snippet = (r.get('content') or "")[:300]
-                                        meta = f" (page {page})" if page else ""
-                                        st.markdown(f"- **{src}**{meta}: {snippet}")
+                                        raw_content = r.get('content') or ""
+                                        
+                                        # Clean and extract meaningful snippet
+                                        cleaned_content = clean_document_text(raw_content)
+                                        if not cleaned_content or is_noise_text(cleaned_content):
+                                            continue
+                                        # Robust sentence splitting and filtering
+                                        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', cleaned_content) if s.strip()]
+                                        sentences = [s for s in sentences if not s.endswith(':')]
+                                        sentences = [s for s in sentences if len(s) > 20 and not is_noise_text(s)]
+                                        # Additional validity: start with uppercase and has a verb
+                                        v_re = re.compile(r"\b(is|are|shall|must|may|will|has|have|does|do|provide|provides|include|includes|appoint|appoints|elect|elects|vote|votes|conduct|conducts|comply|complies|adopt|adopts|keep|keeps|record|records|preside|presides|delegate|delegates|authorize|authorizes|determine|determines|manage|manages)\b", re.IGNORECASE)
+                                        sentences = [s for s in sentences if (s[:1].isupper() and v_re.search(s))]
+                                        sentences = [s for s in sentences if not is_noise_text(s)]
+                                        
+                                        if not sentences:
+                                            # Skip entries without any valid sentences (likely headings/TOC)
+                                            continue
+                                        # Take first 2 sentences for snippet with proper punctuation
+                                        snippet = ' '.join(sentences[:2])
+                                        if sentences[:2]:
+                                            last = sentences[:2][-1]
+                                            if not last.endswith(('.', '!', '?')):
+                                                snippet += '.'
+                                        if len(snippet) > 250:
+                                            snippet = snippet[:247] + "..."
+                                        
+                                        # Avoid duplicate page label if already in source string
+                                        meta = ""
+                                        if (isinstance(page, int) or (isinstance(page, str) and str(page).isdigit())):
+                                            if not re.search(rf"\bpage\s*[:#]?\s*{str(page)}\b", str(src), flags=re.IGNORECASE):
+                                                meta = f" (Page {page})"
+                                        # Normalize score for percent display
+                                        raw_score = r.get('score') if r.get('score') is not None else r.get('relevance_score', 0.0)
+                                        try:
+                                            s = float(raw_score)
+                                            if s > 1.0:
+                                                s = s / 100.0 if s <= 100.0 else min(1.0, s / 100.0)
+                                            if s < 0.0:
+                                                s = 0.0
+                                        except Exception:
+                                            s = 0.0
+                                        score_display = f" • Relevance: {s:.2%}" if s > 0 else ""
+                                        
+                                        st.markdown(f"**{idx}. {src}**{meta}{score_display}")
+                                        st.markdown(f"> {snippet}")
+                                        st.markdown("")  # Add spacing
                                     else:
                                         st.markdown(f"- {str(r)[:200]}")
                             else:
                                 st.info("No sources returned for this query.")
+
+                            # Feedback buttons for Quick Search
+                            try:
+                                if summary_text and results_quick:
+                                    source_docs = []
+                                    for r in results_quick:
+                                        if isinstance(r, dict):
+                                            content_val = r.get('content', str(r))
+                                            src_val = r.get('source', kb_name)
+                                            source_docs.append({'content': content_val, 'source': src_val})
+                                    
+                                    render_feedback_buttons(
+                                        query=q_query,
+                                        response=summary_text[:800],
+                                        source_docs=source_docs,
+                                        confidence_score=sum(r.get('relevance_score', 0.5) if isinstance(r, dict) else 0.5 for r in results_quick) / len(results_quick) if results_quick else 0.0,
+                                        retrieval_method="quick_search_hybrid",
+                                        session_key=f"quick_search_{kb_name}"
+                                    )
+                                    
+                                    render_query_insights(q_query)
+                            except Exception as feedback_error:
+                                logger.warning(f"Failed to render feedback buttons: {feedback_error}")
+
+                            # Full Answer - Always Visible, Collapsible
+                            if summary_text and results_quick:
+                                st.markdown("---")
+                                
+                                # Create clean, well-structured report
+                                full_report_lines = []
+                                full_report_lines.append("# QUERY RESPONSE REPORT")
+                                full_report_lines.append("")
+                                full_report_lines.append(f"**Query:** {q_query}")
+                                full_report_lines.append(f"**Knowledge Base:** {kb_name}")
+                                full_report_lines.append(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                                full_report_lines.append("")
+                                full_report_lines.append("---")
+                                full_report_lines.append("")
+                                
+                                # Add sanitized AI answer
+                                full_report_lines.append(summary_text)
+                                full_report_lines.append("")
+                                full_report_lines.append("---")
+                                full_report_lines.append("")
+                                
+                                # Add detailed sources with complete content
+                                full_report_lines.append("## 📚 DETAILED SOURCES")
+                                full_report_lines.append("")
+                                
+                                for idx, r in enumerate(results_quick[:5], 1):
+                                    if isinstance(r, dict):
+                                        src = r.get('source') or r.get('file_path') or kb_name
+                                        page = r.get('page')
+                                        section = r.get('section')
+                                        raw_content = r.get('content') or ""
+                                        
+                                        # Clean content
+                                        content_clean = clean_document_text(raw_content)
+                                        if not content_clean or is_noise_text(content_clean):
+                                            continue
+                                        
+                                        # Extract complete sentences (no truncation)
+                                        complete_text = QueryResultFormatter.extract_complete_sentences(content_clean, max_length=800)
+                                        if not complete_text:
+                                            complete_text = content_clean[:800]
+                                        
+                                        # Build citation
+                                        citation = f"**Source {idx}: {src}**"
+                                        if isinstance(page, int) or (isinstance(page, str) and page.isdigit()):
+                                            citation += f" (Page {page})"
+                                        if section:
+                                            citation += f" - {section}"
+                                        
+                                        full_report_lines.append(citation)
+                                        full_report_lines.append("")
+                                        full_report_lines.append(complete_text)
+                                        full_report_lines.append("")
+                                        full_report_lines.append("---")
+                                        full_report_lines.append("")
+                                
+                                # Add confidence score
+                                avg_conf = sum(r.get('relevance_score', 0.5) if isinstance(r, dict) else 0.5 for r in results_quick) / len(results_quick) if results_quick else 0.0
+                                full_report_lines.append(f"**Average Confidence Score:** {avg_conf:.2%}")
+                                full_report_lines.append("")
+                                
+                                full_report = "\n".join(full_report_lines)
+                                
+                                # Display in collapsible expander (always visible, can expand/collapse)
+                                with st.expander("📄 FULL ANSWER - CLEAN FORMAT (Click to Expand)", expanded=False):
+                                    st.markdown(full_report)
+                                    
+                                    # Download button
+                                    st.download_button(
+                                        label="💾 Download Full Answer (Markdown)",
+                                        data=full_report,
+                                        file_name=f"full_answer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                                        mime="text/markdown",
+                                        key="qa_quick_download_full"
+                                    )
 
                             # Enterprise combined markdown block (copy + download)
                             try:
@@ -749,9 +1244,15 @@ def render_query_assistant(user=None, permissions=None, auth_middleware=None, av
                                         if isinstance(rr, dict):
                                             ssrc = rr.get('source') or rr.get('file_path') or kb_name
                                             ppg = rr.get('page')
-                                            ssnip = (rr.get('content') or '').replace('\n',' ').strip()
-                                            ssnip = (ssnip[:300] + '...') if len(ssnip) > 300 else ssnip
-                                            mmeta = f" (page {ppg})" if ppg else ""
+                                            raw_s = (rr.get('content') or '').replace('\n',' ').strip()
+                                            raw_s = clean_document_text(raw_s)
+                                            if not raw_s or is_noise_text(raw_s):
+                                                continue
+                                            # Try to cut on sentence boundary
+                                            ssnip = QueryResultFormatter.extract_complete_sentences(raw_s, 300)
+                                            if not ssnip:
+                                                ssnip = (raw_s[:300] + '...') if len(raw_s) > 300 else raw_s
+                                            mmeta = f" (page {ppg})" if (isinstance(ppg, int) or (isinstance(ppg, str) and ppg.isdigit())) else ""
                                             lines.append(f"- {ssrc}{mmeta}: {ssnip}")
                                         else:
                                             ttxt = str(rr).replace('\n',' ').strip()
@@ -782,6 +1283,21 @@ if (btn2 && ta2) {{
                                 )
                             except Exception:
                                 pass
+
+                            # Cache successful results for future queries
+                            try:
+                                if results_quick and summary_text and not st.session_state.get("qa_quick_force", False):
+                                    cache_query_result(
+                                        query=q_query,
+                                        index_name=kb_name,
+                                        backend=selected_backend,
+                                        top_k=q_topk,
+                                        user_id=username or "anonymous",
+                                        results=results_quick,
+                                        summary=summary_text
+                                    )
+                            except Exception as cache_error:
+                                logger.warning(f"Failed to cache query results: {cache_error}")
 
                             # Store report data in session for the Report tab
                             try:
@@ -1345,13 +1861,23 @@ if (btn2 && ta2) {{
         # Enterprise hybrid re-ranking option for Index Search
         st.checkbox("Use enterprise hybrid re-ranking (local merge)", value=True, key="qa_index_enterprise")
         search_button = st.button("🔍 Search Knowledge Base", use_container_width=True, key="qa_index_search_btn")
-        
+
         if search_button:
-            # Validate query
-            if not query or len(query.strip()) < 3:
-                st.warning("Please enter a query with at least 3 characters")
+            # P0 Security: Input Validation
+            valid_query, error_msg, sanitized_query = validate_search_query(query)
+            if not valid_query:
+                st.error(f"❌ Invalid query: {error_msg}")
                 return
-            
+
+            # P0 Security: Rate Limiting
+            user_id = username or "anonymous"
+            allowed, rate_error, rate_info = check_rate_limit(user_id, tier="premium", operation="query")
+            if not allowed:
+                st.error(f"⚠️ {rate_error}")
+                st.info(f"Rate limit info: {rate_info.get('minute_remaining', 0)} queries remaining this minute")
+                return
+
+            # Validate query length (additional check)
             if len(query) > 1000:
                 st.warning("Query too long (max 1000 characters)")
                 return
@@ -1785,48 +2311,115 @@ if (btn && ta) {{
             )
 
     with web_tab:
+        st.subheader("🌐 Web Search with AI Summary")
         web_query = st.text_input(
             "Web search query:", 
-            placeholder="e.g. latest cloud security threats"
+            placeholder="e.g. latest cloud security threats",
+            key="qa_web_query"
         )
         max_results = st.slider("Number of web results", 1, 10, 5, key="qa_web_topk")
         
-        web_button = st.button("🌐 Search Web", use_container_width=True)
+        web_button = st.button("🔍 Search Web", use_container_width=True, key="qa_web_search_btn")
         
         if web_button and web_query:
-            # Log user action
-            st.session_state['user_action'] = "WEB_SEARCH"
-            st.session_state['query_text'] = web_query[:50]
-            
-            with st.spinner("Searching the web..."):
-                try:
-                    # Progress indicator
-                    progress = st.progress(0)
-                    for i in range(100):
-                        time.sleep(0.01)
-                        progress.progress(i + 1)
+            # P0 Security: Input Validation
+            valid_query, error_msg, sanitized_query = validate_search_query(web_query)
+            if not valid_query:
+                st.error(f"❌ Invalid query: {error_msg}")
+            else:
+                # P0 Security: Rate Limiting
+                user_id = username or "anonymous"
+                allowed, rate_error, rate_info = check_rate_limit(user_id, tier="premium", operation="web_search")
+                if not allowed:
+                    st.error(f"⚠️ {rate_error}")
+                    st.info(f"Rate limit info: {rate_info.get('minute_remaining', 0)} searches remaining this minute")
+                else:
+                    # Log user action
+                    st.session_state['user_action'] = "WEB_SEARCH"
+                    st.session_state['query_text'] = web_query[:50]
                     
-                    # Get web search results
-                    web_results = run_web_search(web_query, max_results)
-                    
-                    if not web_results:
-                        st.warning("No web results found. Try different query parameters.")
-                    else:
-                        st.markdown("## **Web Search Results**")
-                        st.markdown(f"**Found {len(web_results)} relevant web pages for your query**")
-                        
-                        for i, result in enumerate(web_results, 1):
-                            st.markdown(f"""
-<div class="web-result">
-<h4>{result['title']}</h4>
-<div class="url">{result['url']}</div>
-<p>{result['snippet']}</p>
-</div>
-                            """, unsafe_allow_html=True)
+                    with st.spinner("Searching the web..."):
+                        try:
+                            # Get web search results
+                            web_results = run_web_search(web_query, max_results)
                             
-                except Exception as e:
-                    st.error(f"❌ Web search failed: {type(e).__name__} — {str(e)[:200]}")
-                    logger.error(f"Web search failed for user {username}: {str(e)}")
+                            if not web_results:
+                                st.warning("No web results found. Try different query parameters.")
+                            else:
+                                # Convert web results to retrieval format for LLM processing
+                                web_docs = []
+                                for r in web_results:
+                                    web_docs.append({
+                                        'content': f"{r.get('title', '')}. {r.get('snippet', '')}",
+                                        'source': r.get('url', 'Web'),
+                                        'page': None,
+                                        'section': r.get('title', ''),
+                                        'relevance_score': 0.8,
+                                        'url': r.get('url', '')
+                                    })
+                                
+                                # Generate AI summary using LLM
+                                st.markdown("## 🧠 AI Summary")
+                                try:
+                                    from utils.enhanced_llm_integration import EnhancedLLMProcessor
+                                    llm_processor = EnhancedLLMProcessor()
+                                    web_summary = llm_processor.process_retrieval_results(
+                                        query=web_query,
+                                        retrieval_results=web_docs,
+                                        index_name="Web Search"
+                                    )
+                                    summary_text = web_summary.get("result", "")
+                                    # Sanitize AI markdown
+                                    summary_text = _sanitize_ai_markdown(summary_text)
+                                    
+                                    if summary_text and len(summary_text.strip()) > 50:
+                                        st.markdown(summary_text)
+                                    else:
+                                        # Fallback summary
+                                        st.info(f"Found {len(web_results)} web results for: {web_query}")
+                                        fallback_summary = f"### Executive Summary\n\nWeb search found {len(web_results)} relevant results about {web_query}.\n\n### Key Findings\n"
+                                        for i, r in enumerate(web_results[:3], 1):
+                                            fallback_summary += f"{i}. **{r.get('title', 'Untitled')}**: {r.get('snippet', 'No description')[:150]}...\n"
+                                        st.markdown(fallback_summary)
+                                except Exception as llm_error:
+                                    logger.warning(f"LLM summary failed for web search: {llm_error}")
+                                    # Simple fallback
+                                    st.info(f"Found {len(web_results)} web results for: {web_query}")
+                                
+                                # Display web sources
+                                st.markdown("### 📚 Web Sources")
+                                for i, result in enumerate(web_results, 1):
+                                    title = result.get('title', 'Untitled')
+                                    url = result.get('url', '')
+                                    snippet = result.get('snippet', 'No description available')
+                                    
+                                    st.markdown(f"**{i}. [{title}]({url})**")
+                                    if snippet:
+                                        st.markdown(f"> {snippet}")
+                                    st.markdown("")
+                                
+                                # Feedback buttons for Web Search
+                                try:
+                                    if web_results:
+                                        # Get the summary text (either from LLM or fallback)
+                                        web_summary_text = summary_text if 'summary_text' in locals() else f"Found {len(web_results)} web results"
+                                        
+                                        render_feedback_buttons(
+                                            query=web_query,
+                                            response=web_summary_text[:800],
+                                            source_docs=web_docs,
+                                            confidence_score=0.75,  # Default confidence for web results
+                                            retrieval_method="web_search_hybrid",
+                                            session_key=f"web_search_{hash(web_query)}"
+                                        )
+                                        
+                                        render_query_insights(web_query)
+                                except Exception as feedback_error:
+                                    logger.warning(f"Failed to render web search feedback buttons: {feedback_error}")
+                                
+                        except Exception as e:
+                            st.error(f"❌ Web search failed: {type(e).__name__} — {str(e)[:200]}")
+                            logger.error(f"Web search failed for user {username}: {str(e)}")
     
     # Add a help section at the bottom
     with st.expander("ℹ️ Help & Tips"):

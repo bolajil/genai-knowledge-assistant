@@ -1,0 +1,252 @@
+# Enterprise Response Format Configuration
+# Customize how query responses are structured and displayed
+
+# Response Structure Settings
+response_structure:
+  # Sections to include in responses (set to false to disable)
+  include_executive_summary: true
+  include_detailed_answer: true
+  include_key_points: true
+  include_information_gaps: true
+  include_related_topics: false  # Optional: suggest related queries
+  include_confidence_scores: false  # Optional: show confidence per statement
+  
+  # Section ordering (1-based, lower numbers appear first)
+  section_order:
+    executive_summary: 1
+    detailed_answer: 2
+    key_points: 3
+    information_gaps: 4
+    related_topics: 5
+
+# Content Extraction Settings
+content_extraction:
+  # Number of sources to use in detailed answer
+  max_detailed_sources: 3
+  
+  # Number of key points to extract
+  max_key_points: 5
+  
+  # Minimum sentence length to consider (characters)
+  min_sentence_length: 20
+  
+  # Minimum key point length (characters)
+  min_key_point_length: 30
+  
+  # Maximum snippet length before truncation
+  max_snippet_length: 250
+  
+  # Number of sentences for executive summary
+  summary_sentences: 2
+  
+  # Number of sentences per detailed source
+  sentences_per_source: 3
+
+# Text Cleaning Settings
+text_cleaning:
+  # Remove page break markers
+  remove_page_breaks: true
+  
+  # Remove OCR artifacts
+  remove_ocr_artifacts: true
+  
+  # Remove headers and footers
+  remove_headers_footers: true
+  
+  # Normalize whitespace
+  normalize_whitespace: true
+  
+  # Minimum line length to keep (characters)
+  min_line_length: 3
+  
+  # Custom patterns to remove (regex)
+  custom_removal_patterns:
+    - "local_ingestion:"
+    - "\\d+\\s+Section\\s+\\d+"  # Section numbering artifacts
+    - "Given under my hand and seal"  # Notary boilerplate
+
+# Citation Settings
+citations:
+  # Citation format: inline, footnote, or endnote
+  format: "inline"
+  
+  # Include page numbers
+  include_page_numbers: true
+  
+  # Include section references
+  include_sections: false
+  
+  # Include relevance scores
+  include_relevance_scores: true
+  
+  # Relevance score display format
+  score_format: "percentage"  # percentage or decimal
+  
+  # Minimum score to display (0.0 to 1.0)
+  min_score_display: 0.0
+
+# Information Gap Assessment
+information_gaps:
+  # Thresholds for coverage assessment
+  excellent_threshold: 5  # 5+ sources = excellent
+  good_threshold: 3       # 3-4 sources = good
+  fair_threshold: 2       # 2 sources = fair
+  poor_threshold: 1       # 1 source = poor
+  
+  # Messages for each level
+  messages:
+    excellent: "✅ Comprehensive information available across multiple document sections."
+    good: "✅ Good coverage with multiple relevant sources found."
+    moderate: "ℹ️ Moderate coverage - {count} relevant sections found."
+    limited: "⚠️ Limited document coverage - only {count} relevant section(s) found. Additional sources may provide more comprehensive information."
+    none: "❌ No relevant information found in the knowledge base."
+
+# LLM Settings
+llm_settings:
+  # Fallback to structured format when LLM fails
+  use_structured_fallback: true
+  
+  # Minimum LLM response length to consider valid (characters)
+  min_valid_response_length: 50
+  
+  # Maximum tokens for LLM response
+  max_tokens: 900
+  
+  # Temperature for response generation
+  temperature: 0.3
+  
+  # Model preferences (in order of preference)
+  model_preferences:
+    - "gpt-4"
+    - "gpt-3.5-turbo"
+    - "claude-3-sonnet"
+    - "mistral-large"
+
+# Display Settings
+display:
+  # Use markdown formatting
+  use_markdown: true
+  
+  # Use emoji indicators
+  use_emojis: true
+  
+  # Source numbering style: numbered, bulleted, or none
+  source_numbering: "numbered"
+  
+  # Show metadata in sources
+  show_source_metadata: true
+  
+  # Metadata to display
+  metadata_fields:
+    - "source"
+    - "page"
+    - "relevance_score"
+  
+  # Use block quotes for snippets
+  use_block_quotes: true
+  
+  # Add spacing between sources
+  source_spacing: true
+  
+  # Highlight key terms in snippets
+  highlight_query_terms: false
+
+# Response Style Presets
+style_presets:
+  # Standard enterprise format
+  standard:
+    name: "Standard Enterprise"
+    description: "Balanced format with all sections"
+    sections:
+      executive_summary: true
+      detailed_answer: true
+      key_points: true
+      information_gaps: true
+    max_detailed_sources: 3
+    max_key_points: 5
+    
+  # Executive brief format
+  executive:
+    name: "Executive Brief"
+    description: "Concise format for leadership"
+    sections:
+      executive_summary: true
+      detailed_answer: false
+      key_points: true
+      information_gaps: false
+    max_detailed_sources: 2
+    max_key_points: 3
+    summary_sentences: 3
+    
+  # Technical deep-dive format
+  technical:
+    name: "Technical Deep-Dive"
+    description: "Detailed format with comprehensive sources"
+    sections:
+      executive_summary: true
+      detailed_answer: true
+      key_points: true
+      information_gaps: true
+    max_detailed_sources: 5
+    max_key_points: 8
+    sentences_per_source: 5
+    
+  # Quick reference format
+  quick:
+    name: "Quick Reference"
+    description: "Key points only"
+    sections:
+      executive_summary: false
+      detailed_answer: false
+      key_points: true
+      information_gaps: false
+    max_key_points: 5
+
+# Performance Settings
+performance:
+  # Cache cleaned text
+  cache_cleaned_text: true
+  
+  # Cache TTL in seconds
+  cache_ttl: 3600
+  
+  # Parallel processing for multiple sources
+  parallel_processing: false
+  
+  # Maximum processing time per query (seconds)
+  max_processing_time: 30
+
+# Logging and Monitoring
+logging:
+  # Log response generation
+  log_responses: true
+  
+  # Log fallback usage
+  log_fallbacks: true
+  
+  # Log performance metrics
+  log_performance: true
+  
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  log_level: "INFO"
+
+# Export Settings
+export:
+  # Include metadata in exports
+  include_metadata: true
+  
+  # Export formats available
+  formats:
+    - "markdown"
+    - "pdf"
+    - "docx"
+    - "json"
+  
+  # Default export format
+  default_format: "markdown"
+  
+  # Include timestamp in exports
+  include_timestamp: true
+  
+  # Include query in exports
+  include_query: true

@@ -9,11 +9,17 @@ import faiss
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from sentence_transformers import SentenceTransformer
-import openai
+# Optional OpenAI SDK import (do not fail if missing)
+try:
+    from openai import OpenAI as _OpenAIClient  # new SDK client
+    _OPENAI_SDK_AVAILABLE = True
+except Exception:
+    _OpenAIClient = None
+    _OPENAI_SDK_AVAILABLE = False
 from pathlib import Path
 
 # Import text cleaning utility
-from .text_cleaning import clean_document_text
+from .text_cleaning import clean_document_text, is_noise_text
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +45,9 @@ class UnifiedSearchEngine:
             logger.error(f"Failed to load sentence transformer: {str(e)}")
         
         try:
-            # Initialize OpenAI client
-            openai_key = os.getenv('OPENAI_API_KEY')
-            if openai_key:
-                openai.api_key = openai_key
-                self.openai_client = openai
+            # Initialize OpenAI client lazily and only if SDK is available
+            self.openai_client = self._create_openai_client()
+            if self.openai_client:
                 logger.info("OpenAI client initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize OpenAI client: {str(e)}")
@@ -60,7 +64,7 @@ class UnifiedSearchEngine:
         try:
             from openai import OpenAI
         except ImportError as e:
-            logger.error(f"OpenAI library not installed: {e}")
+            logger.info(f"OpenAI library not installed; skipping client init: {e}")
             return None
         
         api_key = os.getenv("OPENAI_API_KEY")
@@ -70,6 +74,7 @@ class UnifiedSearchEngine:
             if api_key:
                 return OpenAI(api_key=api_key)
             else:
+                # Allow default env-driven init if supported
                 return OpenAI()
         except Exception as e:
             logger.error(f"Failed to create OpenAI client: {e}")
@@ -204,6 +209,32 @@ class UnifiedSearchEngine:
                     return metadata
                 except Exception as e:
                     logger.error(f"Error loading metadata from {meta_path}: {str(e)}")
+        
+        # Compatibility: support documents.pkl produced by local FAISS ingestion
+        docs_pkl = index_path / 'documents.pkl'
+        if docs_pkl.exists():
+            try:
+                with open(docs_pkl, 'rb') as f:
+                    payload = pickle.load(f)
+                # Expected structure: {'documents': [text,...], 'metadatas': [{'source': ...}, ...]}
+                docs_list = []
+                documents = payload.get('documents') if isinstance(payload, dict) else None
+                metadatas = payload.get('metadatas') if isinstance(payload, dict) else None
+                if isinstance(documents, list):
+                    for i, text in enumerate(documents):
+                        md = {}
+                        if isinstance(metadatas, list) and i < len(metadatas) and isinstance(metadatas[i], dict):
+                            md = metadatas[i]
+                        docs_list.append({
+                            'content': text,
+                            'source': md.get('source', f'{index_path.name}.pdf'),
+                            'page': md.get('page') if isinstance(md.get('page'), (int, str)) else None,
+                        })
+                if docs_list:
+                    logger.info(f"Constructed metadata from {docs_pkl} with {len(docs_list)} entries")
+                    return docs_list
+            except Exception as e:
+                logger.error(f"Error adapting documents.pkl at {docs_pkl}: {str(e)}")
         
         # Try to create metadata from text files
         text_file = index_path / "extracted_text.txt"
@@ -352,6 +383,37 @@ class UnifiedSearchEngine:
             'metadata': {'error': True}
         }]
     
+    def _generate_fallback_response(self, query: str, search_results: List[Dict[str, Any]]) -> str:
+        """Generate fallback response when LLM is not available"""
+        if not search_results:
+            return f"No relevant documents found for query: '{query}'"
+        
+        # Clean and keep non-noise results
+        kept: List[Dict[str, Any]] = []
+        for r in search_results:
+            cleaned = clean_document_text(r.get('content', '') or '')
+            if not cleaned or is_noise_text(cleaned):
+                continue
+            kept.append({
+                'content': cleaned,
+                'source': r.get('source', 'Unknown'),
+                'score': r.get('score', 0.0),
+                'page': r.get('page', None),
+            })
+        if not kept:
+            return f"Found {len(search_results)} result(s), but no clean content suitable for display. Please refine your query."
+        
+        parts: List[str] = [f"Found {len(kept)} relevant document(s) for your query: '{query}'", ""]
+        for i, r in enumerate(kept, 1):
+            page = r.get('page')
+            page_seg = f" (Page {page})" if (isinstance(page, int) or (isinstance(page, str) and page.isdigit())) else ""
+            snippet = r['content'][:500] + ('' if len(r['content']) <= 500 else '...')
+            parts.append(f"**Result {i}** (Relevance: {r['score']:.2f}):")
+            parts.append(f"Source: {r['source']}{page_seg}")
+            parts.append(f"Content: {snippet}")
+            parts.append("---")
+        return "\n".join(parts)
+
     def query_with_llm(self, query: str, index_name: str, model_name: str = None, top_k: int = 3) -> Dict[str, Any]:
         """
         Query index and generate LLM response based on retrieved content
@@ -376,15 +438,20 @@ class UnifiedSearchEngine:
                 'index_name': index_name
             }
         
-        # Prepare context from search results
+        # Prepare a cleaner context from search results
         context_parts = []
-        for result in search_results:
-            content = result.get('content', '')  # Get full content without truncation
+        for result in search_results[:max(3, top_k)]:  # keep top few
+            raw = result.get('content', '') or ''
+            cleaned = clean_document_text(raw)
+            if not cleaned or is_noise_text(cleaned):
+                continue
             source = result.get('source', 'Unknown')
             score = result.get('score', 0.0)
-            context_parts.append(f"Source: {source} (Relevance: {score:.3f})\n{content}")
+            page = result.get('page', None)
+            page_seg = f" (Page {page})" if (isinstance(page, int) or (isinstance(page, str) and page.isdigit())) else ""
+            context_parts.append(f"Source: {source}{page_seg} (Relevance: {score:.3f})\n{cleaned}")
         
-        context = "\n\n---\n\n".join(context_parts)
+        context = "\n\n---\n\n".join(context_parts) if context_parts else ""
         
         # Generate LLM response using unified config
         try:
@@ -555,25 +622,28 @@ class UnifiedSearchEngine:
             query: Original user query
             search_results: Results from document search
             model_name: LLM model to use
-            
         Returns:
             Generated response string
         """
         try:
             if not self.openai_client or not search_results:
                 return self._generate_fallback_response(query, search_results)
-            
+
             # Prepare context from search results
             context_parts = []
             for i, result in enumerate(search_results[:3]):  # Use top 3 results
-                content = result.get('content', '')  # Get full content without truncation
+                raw_content = result.get('content', '')
+                cleaned = clean_document_text(raw_content)
+                if not cleaned or is_noise_text(cleaned):
+                    continue
                 source = result.get('source', 'Unknown')
-                page = result.get('page', 0)
-                
-                context_parts.append(f"Document {i+1} (Source: {source}, Page: {page}):\n{content}")
-            
+                page = result.get('page')
+                page_seg = f", Page: {page}" if (isinstance(page, int) or (isinstance(page, str) and page.isdigit())) else ""
+                context_parts.append(f"Document {i+1} (Source: {source}{page_seg}):\n{cleaned}")
+            if not context_parts:
+                return self._generate_fallback_response(query, search_results)
             context = "\n\n".join(context_parts)
-            
+
             # Create prompt
             prompt = f"""Based on the following document excerpts, please answer the user's question. If the information is not available in the documents, please say so clearly.
 
@@ -583,70 +653,39 @@ Document Context:
 {context}
 
 Please provide a comprehensive answer based on the document content above. Include specific references to the source documents when possible."""
-            
-            # Generate response
-            response = self.openai_client.ChatCompletion.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that answers questions based on provided document context. Always cite your sources and be accurate."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=1000,
-                temperature=0.3
-            )
-            
-            return response.choices[0].message.content
-            
+
+            # New SDK path
+            if hasattr(self.openai_client, "chat") and hasattr(self.openai_client.chat, "completions"):
+                response = self.openai_client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that answers questions based on provided document context. Always cite your sources and be accurate."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=1000,
+                    temperature=0.3,
+                )
+                return response.choices[0].message.content
+
+            # Legacy SDK path (if present)
+            if hasattr(self.openai_client, "ChatCompletion"):
+                response = self.openai_client.ChatCompletion.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that answers questions based on provided document context. Always cite your sources and be accurate."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=1000,
+                    temperature=0.3,
+                )
+                return response.choices[0].message.content
+
+            # If neither interface exists, fallback
+            return self._generate_fallback_response(query, search_results)
+
         except Exception as e:
             logger.error(f"Error generating LLM response: {str(e)}")
             return self._generate_fallback_response(query, search_results)
-    
-    def _generate_fallback_response(self, query: str, search_results: List[Dict[str, Any]]) -> str:
-        """Generate fallback response when LLM is not available"""
-        if not search_results:
-            return f"No relevant documents found for query: '{query}'"
-        
-        response_parts = [f"Found {len(search_results)} relevant document(s) for your query: '{query}'\n"]
-        
-        for i, result in enumerate(search_results, 1):
-            content = result.get('content', 'No content available')[:500]
-            source = result.get('source', 'Unknown')
-            score = result.get('score', 0.0)
-            
-            response_parts.append(f"**Result {i}** (Relevance: {score:.2f}):")
-            response_parts.append(f"Source: {source}")
-            response_parts.append(f"Content: {content}...")
-            response_parts.append("---")
-        
-        return "\n".join(response_parts)
-    
-    def query_with_llm(self, query: str, index_name: str, model_name: str = "gpt-3.5-turbo", top_k: int = 5) -> Dict[str, Any]:
-        """
-        Complete query pipeline: search index + generate LLM response
-        
-        Args:
-            query: User query
-            index_name: Index to search
-            model_name: LLM model to use
-            top_k: Number of search results to retrieve
-            
-        Returns:
-            Dictionary with search results and generated response
-        """
-        # Search the index
-        search_results = self.search_index(query, index_name, top_k)
-        
-        # Generate LLM response
-        llm_response = self.generate_llm_response(query, search_results, model_name)
-        
-        return {
-            'query': query,
-            'index_name': index_name,
-            'search_results': search_results,
-            'llm_response': llm_response,
-            'model_used': model_name,
-            'results_count': len(search_results)
-        }
 
 # Global instance
 unified_search_engine = UnifiedSearchEngine()
