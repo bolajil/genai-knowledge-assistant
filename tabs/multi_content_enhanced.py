@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional
 import io
 import base64
 from pathlib import Path
+<<<<<<< HEAD
 import re
 import os
 from utils.text_cleaning import (
@@ -28,6 +29,8 @@ try:
 except Exception:
     ChatOpenAI = None
     ChatPromptTemplate = None
+=======
+>>>>>>> clean-master
 
 class PowerBIIntegration:
     """PowerBI integration for embedding reports and dashboards"""
@@ -2884,7 +2887,11 @@ def render_multi_source_search(available_indexes, auth_middleware):
                         search_type=search_type
                     )
                     
+<<<<<<< HEAD
                     display_search_results(search_results, result_format, search_query)
+=======
+                    display_search_results(search_results, result_format)
+>>>>>>> clean-master
                     
                     auth_middleware.log_user_action("ENHANCED_MULTI_SOURCE_SEARCH", {
                         "query": search_query,
@@ -2918,6 +2925,7 @@ def perform_multi_source_search(query, selected_indexes, include_web, include_ex
     
     return results
 
+<<<<<<< HEAD
 def synthesize_topline_answer(search_results: Dict[str, Any], query: str) -> Optional[str]:
     """Create a concise, query-aligned answer with citations using enterprise utilities.
     Uses existing document results and augments with enterprise search if needed.
@@ -3250,10 +3258,13 @@ def _build_benefit_answer(query: str, norm_results: List[Dict[str, Any]]) -> Opt
     except Exception:
         return None
 
+=======
+>>>>>>> clean-master
 def search_document_indexes(query, selected_indexes, max_results, search_type):
     """Search through document indexes using existing search functionality"""
     all_results = []
     
+<<<<<<< HEAD
     # Helper: build a human-friendly snippet around the query without mid-word cuts
     def _build_snippet(text: str, q: str, max_len: Optional[int] = None, ctx_sentences: int = 3) -> str:
         """Create a snippet composed of full sentences around the first query match.
@@ -3337,6 +3348,8 @@ def search_document_indexes(query, selected_indexes, max_results, search_type):
             return join_spans(out_spans)
         return cleaned if max_len is None else (cleaned[:max_len].rsplit(' ', 1)[0] + '...')
     
+=======
+>>>>>>> clean-master
     for index_name in selected_indexes:
         try:
             # Try multiple search approaches
@@ -3371,9 +3384,13 @@ def search_document_indexes(query, selected_indexes, max_results, search_type):
                     possible_paths = [
                         os.path.join(base_path, 'faiss_index', f'{index_name}_index'),
                         os.path.join(base_path, 'faiss_index', index_name),
+<<<<<<< HEAD
                         # Also support directory-based indexes discovered under data/indexes
                         os.path.join(base_path, 'indexes', f'{index_name}_index'),
                         os.path.join(base_path, 'indexes', index_name)
+=======
+                        os.path.join(base_path, 'indexes', f'{index_name}_index_index')
+>>>>>>> clean-master
                     ]
                     
                     index_path = None
@@ -3397,6 +3414,7 @@ def search_document_indexes(query, selected_indexes, max_results, search_type):
                                     with open(meta_path, 'rb') as f:
                                         metadata = pickle.load(f)
                                     break
+<<<<<<< HEAD
                             # Compatibility: support documents.pkl produced by local FAISS ingestion
                             if metadata is None:
                                 docs_pkl = os.path.join(index_path, 'documents.pkl')
@@ -3425,16 +3443,26 @@ def search_document_indexes(query, selected_indexes, max_results, search_type):
                             # If no metadata file, try to read text content directly
                             if metadata is None:
                                 # Try same folder first
+=======
+                            
+                            # If no metadata file, try to read text content directly
+                            if metadata is None:
+>>>>>>> clean-master
                                 text_file = os.path.join(index_path, 'extracted_text.txt')
                                 if os.path.exists(text_file):
                                     with open(text_file, 'r', encoding='utf-8') as f:
                                         content = f.read()
+<<<<<<< HEAD
+=======
+                                    # Create simple metadata structure
+>>>>>>> clean-master
                                     chunks = [content[i:i+1000] for i in range(0, len(content), 1000)]
                                     metadata = [{
                                         'content': chunk,
                                         'source': f'{index_name}.pdf',
                                         'page': i//10 + 1
                                     } for i, chunk in enumerate(chunks)]
+<<<<<<< HEAD
                                 else:
                                     # Fallback: look under data/indexes/<name> for extracted_text.txt
                                     text_candidates = [
@@ -3452,6 +3480,8 @@ def search_document_indexes(query, selected_indexes, max_results, search_type):
                                                 'page': i//10 + 1
                                             } for i, chunk in enumerate(chunks)]
                                             break
+=======
+>>>>>>> clean-master
                         
                             if metadata:
                                 # Generate query embedding
@@ -3464,6 +3494,7 @@ def search_document_indexes(query, selected_indexes, max_results, search_type):
                                 # Format results
                                 for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
                                     if idx < len(metadata) and idx >= 0:
+<<<<<<< HEAD
                                         doc_metadata = metadata[idx] or {}
                                         # Combine neighboring chunks to avoid sentence cuts across chunk boundaries
                                         neighbor_indices = range(max(0, idx - 8), min(len(metadata), idx + 9))
@@ -3518,20 +3549,35 @@ def search_document_indexes(query, selected_indexes, max_results, search_type):
                                         similarity_score = 1.0 / (1.0 + float(score))
                                         index_results.append({
                                             'content': snippet,
+=======
+                                        doc_metadata = metadata[idx]
+                                        # Convert FAISS distance to similarity score
+                                        similarity_score = 1.0 / (1.0 + float(score))
+                                        index_results.append({
+                                            'content': doc_metadata.get('content', 'No content available')[:500] + '...',
+>>>>>>> clean-master
                                             'score': similarity_score,
                                             'metadata': {
                                                 'source': doc_metadata.get('source', f'{index_name}.pdf'),
                                                 'page': doc_metadata.get('page', i + 1),
                                                 'index_name': index_name,
+<<<<<<< HEAD
                                                 'full_content': cleaned_text,
                                                 'full_document': doc_full_clean,
                                                 'chunk_id': idx,
                                                 'context_window': [max(0, idx - 1), min(len(metadata) - 1, idx + 1)]
+=======
+                                                'full_content': doc_metadata.get('content', '')
+>>>>>>> clean-master
                                             },
                                             'relevance': similarity_score
                                         })
                             else:
+<<<<<<< HEAD
                                 st.warning(f"No metadata found for {index_name} index at {index_path}")
+=======
+                                st.warning(f"No metadata found for {index_name} index")
+>>>>>>> clean-master
                         else:
                             st.warning(f"FAISS index file not found for {index_name}")
                     else:
@@ -3768,7 +3814,11 @@ def search_powerbi_reports(query, max_results):
         'type': 'Dashboard'
     }] if query else []
 
+<<<<<<< HEAD
 def display_search_results(search_results, result_format, query=None):
+=======
+def display_search_results(search_results, result_format):
+>>>>>>> clean-master
     """Display search results in the specified format"""
     if not search_results:
         st.info("No results found across all sources")
@@ -3777,6 +3827,7 @@ def display_search_results(search_results, result_format, query=None):
     total_results = sum(len(results) for results in search_results.values())
     st.success(f"Found {total_results} results across {len(search_results)} source types")
     
+<<<<<<< HEAD
     # Synthesize and display a concise answer aligned with the query
     try:
         answer_md = synthesize_topline_answer(search_results, query)
@@ -3787,6 +3838,8 @@ def display_search_results(search_results, result_format, query=None):
     except Exception:
         pass
     
+=======
+>>>>>>> clean-master
     # Create summary table
     summary_data = []
     for source_type, results in search_results.items():
@@ -3816,6 +3869,7 @@ def display_search_results(search_results, result_format, query=None):
                         col1, col2 = st.columns([3, 1])
                         
                         with col1:
+<<<<<<< HEAD
                             st.markdown(f"**{i+1}.**")
                             # Compact source/page header
                             try:
@@ -3851,6 +3905,18 @@ def display_search_results(search_results, result_format, query=None):
                                         st.write(full_ctx)
                             except Exception:
                                 pass
+=======
+                            title = result.get('title', result.get('content', '')[:100] + '...')
+                            st.markdown(f"**{i+1}. {title}**")
+                            
+                            content = result.get('content', '')
+                            if len(content) > 200:
+                                content = content[:200] + '...'
+                            st.write(content)
+                            
+                            if result.get('url'):
+                                st.markdown(f"🔗 [View Source]({result['url']})")
+>>>>>>> clean-master
                         
                         with col2:
                             st.metric("Relevance", f"{result.get('score', 0):.2f}")
@@ -3869,9 +3935,15 @@ def display_search_results(search_results, result_format, query=None):
                             st.write(f"**Type:** {result.get('type', 'Unknown')}")
                             
                             if result.get('title'):
+<<<<<<< HEAD
                                 st.markdown("**Title:**<br>" + result['title'], unsafe_allow_html=True)
                             
                             st.markdown("**Content:**<br>" + (result.get('content', 'No content available') or ''), unsafe_allow_html=True)
+=======
+                                st.write(f"**Title:** {result['title']}")
+                            
+                            st.write(f"**Content:** {result.get('content', 'No content available')}")
+>>>>>>> clean-master
                             
                             if result.get('url'):
                                 st.markdown(f"🔗 [View Source]({result['url']})")

@@ -16,6 +16,7 @@ import httpx
 from utils.weaviate_manager import get_weaviate_manager
 from utils.semantic_chunking_strategy import create_semantic_chunks
 from sentence_transformers import SentenceTransformer
+<<<<<<< HEAD
 from io import BytesIO
 
 # Optional PDF page counter
@@ -24,6 +25,8 @@ try:
     PDF_READER_AVAILABLE = True
 except Exception:
     PDF_READER_AVAILABLE = False
+=======
+>>>>>>> clean-master
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +152,7 @@ class WeaviateIngestionHelper:
                            use_semantic_chunking: bool = True,
                            use_local_embeddings: bool = False,
                            embedding_model: str = "all-MiniLM-L6-v2") -> Dict[str, Any]:
+<<<<<<< HEAD
         try:
             # Use robust PDF extraction with quality validation
             from utils.robust_pdf_extractor import extract_text_from_pdf_robust, validate_extraction_quality
@@ -174,6 +178,27 @@ class WeaviateIngestionHelper:
             )
 
             result = self._ingest_text_content(
+=======
+        """Ingest PDF document into Weaviate using robust extraction"""
+        try:
+            # Use robust PDF extraction with quality validation
+            from utils.robust_pdf_extractor import extract_text_from_pdf_robust, validate_extraction_quality
+            
+            text_content, method = extract_text_from_pdf_robust(file_content, file_name)
+            
+            if not text_content:
+                logger.error(f"Failed to extract text from PDF: {file_name}")
+                return {"success": False, "error": "PDF text extraction failed"}
+            
+            # Validate extraction quality
+            is_valid, quality, message = validate_extraction_quality(text_content, min_quality=0.5)
+            logger.info(f"PDF extraction for {file_name}: method={method}, quality={quality:.2f}, valid={is_valid}")
+            
+            if not is_valid:
+                logger.warning(f"Low quality PDF extraction for {file_name}: {message}")
+            
+            return self._ingest_text_content(
+>>>>>>> clean-master
                 collection_name=collection_name,
                 text_content=text_content,
                 file_name=file_name,
@@ -183,6 +208,7 @@ class WeaviateIngestionHelper:
                 chunk_overlap=chunk_overlap,
                 use_semantic_chunking=use_semantic_chunking,
                 use_local_embeddings=use_local_embeddings,
+<<<<<<< HEAD
                 embedding_model=embedding_model,
             )
             if isinstance(result, dict):
@@ -191,6 +217,15 @@ class WeaviateIngestionHelper:
         except Exception as e:
             logger.error(f"Error ingesting PDF {file_name}: {e}")
             return {"success": False, "error": str(e)}
+=======
+                embedding_model=embedding_model
+            )
+            
+        except Exception as e:
+            logger.error(f"Error ingesting PDF {file_name}: {e}")
+            return {"success": False, "error": str(e)}
+    
+>>>>>>> clean-master
     def ingest_pdf(self,
                    collection_name: str,
                    pdf_file: Any,
@@ -443,6 +478,7 @@ class WeaviateIngestionHelper:
             diag.setdefault("document_type", document_type)
             diag.setdefault("file_name", file_name)
             diag["total_chunks"] = len(chunk_texts)
+<<<<<<< HEAD
             # Add text size metrics for UI
             try:
                 total_chars = len(text_content or "")
@@ -450,6 +486,8 @@ class WeaviateIngestionHelper:
                 total_chars = 0
             diag["total_chars"] = total_chars
             diag["approx_tokens"] = total_chars // 4  # rough heuristic for token estimation
+=======
+>>>>>>> clean-master
             if "phase_timings_ms" not in diag or not isinstance(diag.get("phase_timings_ms"), dict):
                 diag["phase_timings_ms"] = {}
             diag["phase_timings_ms"]["chunking_ms"] = chunking_duration_ms

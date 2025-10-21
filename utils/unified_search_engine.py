@@ -9,6 +9,7 @@ import faiss
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from sentence_transformers import SentenceTransformer
+<<<<<<< HEAD
 # Optional OpenAI SDK import (do not fail if missing)
 try:
     from openai import OpenAI as _OpenAIClient  # new SDK client
@@ -20,6 +21,13 @@ from pathlib import Path
 
 # Import text cleaning utility
 from .text_cleaning import clean_document_text, is_noise_text
+=======
+import openai
+from pathlib import Path
+
+# Import text cleaning utility
+from .text_cleaning import clean_document_text
+>>>>>>> clean-master
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +53,17 @@ class UnifiedSearchEngine:
             logger.error(f"Failed to load sentence transformer: {str(e)}")
         
         try:
+<<<<<<< HEAD
             # Initialize OpenAI client lazily and only if SDK is available
             self.openai_client = self._create_openai_client()
             if self.openai_client:
+=======
+            # Initialize OpenAI client
+            openai_key = os.getenv('OPENAI_API_KEY')
+            if openai_key:
+                openai.api_key = openai_key
+                self.openai_client = openai
+>>>>>>> clean-master
                 logger.info("OpenAI client initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize OpenAI client: {str(e)}")
@@ -64,7 +80,11 @@ class UnifiedSearchEngine:
         try:
             from openai import OpenAI
         except ImportError as e:
+<<<<<<< HEAD
             logger.info(f"OpenAI library not installed; skipping client init: {e}")
+=======
+            logger.error(f"OpenAI library not installed: {e}")
+>>>>>>> clean-master
             return None
         
         api_key = os.getenv("OPENAI_API_KEY")
@@ -74,7 +94,10 @@ class UnifiedSearchEngine:
             if api_key:
                 return OpenAI(api_key=api_key)
             else:
+<<<<<<< HEAD
                 # Allow default env-driven init if supported
+=======
+>>>>>>> clean-master
                 return OpenAI()
         except Exception as e:
             logger.error(f"Failed to create OpenAI client: {e}")
@@ -210,6 +233,7 @@ class UnifiedSearchEngine:
                 except Exception as e:
                     logger.error(f"Error loading metadata from {meta_path}: {str(e)}")
         
+<<<<<<< HEAD
         # Compatibility: support documents.pkl produced by local FAISS ingestion
         docs_pkl = index_path / 'documents.pkl'
         if docs_pkl.exists():
@@ -236,6 +260,8 @@ class UnifiedSearchEngine:
             except Exception as e:
                 logger.error(f"Error adapting documents.pkl at {docs_pkl}: {str(e)}")
         
+=======
+>>>>>>> clean-master
         # Try to create metadata from text files
         text_file = index_path / "extracted_text.txt"
         if text_file.exists():
@@ -383,6 +409,7 @@ class UnifiedSearchEngine:
             'metadata': {'error': True}
         }]
     
+<<<<<<< HEAD
     def _generate_fallback_response(self, query: str, search_results: List[Dict[str, Any]]) -> str:
         """Generate fallback response when LLM is not available"""
         if not search_results:
@@ -414,6 +441,8 @@ class UnifiedSearchEngine:
             parts.append("---")
         return "\n".join(parts)
 
+=======
+>>>>>>> clean-master
     def query_with_llm(self, query: str, index_name: str, model_name: str = None, top_k: int = 3) -> Dict[str, Any]:
         """
         Query index and generate LLM response based on retrieved content
@@ -438,6 +467,7 @@ class UnifiedSearchEngine:
                 'index_name': index_name
             }
         
+<<<<<<< HEAD
         # Prepare a cleaner context from search results
         context_parts = []
         for result in search_results[:max(3, top_k)]:  # keep top few
@@ -452,6 +482,17 @@ class UnifiedSearchEngine:
             context_parts.append(f"Source: {source}{page_seg} (Relevance: {score:.3f})\n{cleaned}")
         
         context = "\n\n---\n\n".join(context_parts) if context_parts else ""
+=======
+        # Prepare context from search results
+        context_parts = []
+        for result in search_results:
+            content = result.get('content', '')  # Get full content without truncation
+            source = result.get('source', 'Unknown')
+            score = result.get('score', 0.0)
+            context_parts.append(f"Source: {source} (Relevance: {score:.3f})\n{content}")
+        
+        context = "\n\n---\n\n".join(context_parts)
+>>>>>>> clean-master
         
         # Generate LLM response using unified config
         try:
@@ -622,12 +663,17 @@ class UnifiedSearchEngine:
             query: Original user query
             search_results: Results from document search
             model_name: LLM model to use
+<<<<<<< HEAD
+=======
+            
+>>>>>>> clean-master
         Returns:
             Generated response string
         """
         try:
             if not self.openai_client or not search_results:
                 return self._generate_fallback_response(query, search_results)
+<<<<<<< HEAD
 
             # Prepare context from search results
             context_parts = []
@@ -644,6 +690,20 @@ class UnifiedSearchEngine:
                 return self._generate_fallback_response(query, search_results)
             context = "\n\n".join(context_parts)
 
+=======
+            
+            # Prepare context from search results
+            context_parts = []
+            for i, result in enumerate(search_results[:3]):  # Use top 3 results
+                content = result.get('content', '')  # Get full content without truncation
+                source = result.get('source', 'Unknown')
+                page = result.get('page', 0)
+                
+                context_parts.append(f"Document {i+1} (Source: {source}, Page: {page}):\n{content}")
+            
+            context = "\n\n".join(context_parts)
+            
+>>>>>>> clean-master
             # Create prompt
             prompt = f"""Based on the following document excerpts, please answer the user's question. If the information is not available in the documents, please say so clearly.
 
@@ -653,6 +713,7 @@ Document Context:
 {context}
 
 Please provide a comprehensive answer based on the document content above. Include specific references to the source documents when possible."""
+<<<<<<< HEAD
 
             # New SDK path
             if hasattr(self.openai_client, "chat") and hasattr(self.openai_client.chat, "completions"):
@@ -686,6 +747,72 @@ Please provide a comprehensive answer based on the document content above. Inclu
         except Exception as e:
             logger.error(f"Error generating LLM response: {str(e)}")
             return self._generate_fallback_response(query, search_results)
+=======
+            
+            # Generate response
+            response = self.openai_client.ChatCompletion.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that answers questions based on provided document context. Always cite your sources and be accurate."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=1000,
+                temperature=0.3
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            logger.error(f"Error generating LLM response: {str(e)}")
+            return self._generate_fallback_response(query, search_results)
+    
+    def _generate_fallback_response(self, query: str, search_results: List[Dict[str, Any]]) -> str:
+        """Generate fallback response when LLM is not available"""
+        if not search_results:
+            return f"No relevant documents found for query: '{query}'"
+        
+        response_parts = [f"Found {len(search_results)} relevant document(s) for your query: '{query}'\n"]
+        
+        for i, result in enumerate(search_results, 1):
+            content = result.get('content', 'No content available')[:500]
+            source = result.get('source', 'Unknown')
+            score = result.get('score', 0.0)
+            
+            response_parts.append(f"**Result {i}** (Relevance: {score:.2f}):")
+            response_parts.append(f"Source: {source}")
+            response_parts.append(f"Content: {content}...")
+            response_parts.append("---")
+        
+        return "\n".join(response_parts)
+    
+    def query_with_llm(self, query: str, index_name: str, model_name: str = "gpt-3.5-turbo", top_k: int = 5) -> Dict[str, Any]:
+        """
+        Complete query pipeline: search index + generate LLM response
+        
+        Args:
+            query: User query
+            index_name: Index to search
+            model_name: LLM model to use
+            top_k: Number of search results to retrieve
+            
+        Returns:
+            Dictionary with search results and generated response
+        """
+        # Search the index
+        search_results = self.search_index(query, index_name, top_k)
+        
+        # Generate LLM response
+        llm_response = self.generate_llm_response(query, search_results, model_name)
+        
+        return {
+            'query': query,
+            'index_name': index_name,
+            'search_results': search_results,
+            'llm_response': llm_response,
+            'model_used': model_name,
+            'results_count': len(search_results)
+        }
+>>>>>>> clean-master
 
 # Global instance
 unified_search_engine = UnifiedSearchEngine()

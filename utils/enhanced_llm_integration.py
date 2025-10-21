@@ -10,7 +10,11 @@ import os
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 from dotenv import load_dotenv
+<<<<<<< HEAD
 from .text_cleaning import clean_document_text, is_noise_text
+=======
+from .text_cleaning import clean_document_text
+>>>>>>> clean-master
 
 # Load environment variables
 load_dotenv()
@@ -87,6 +91,7 @@ class EnhancedLLMProcessor:
             context_parts = []
             
             for i, result in enumerate(retrieval_results[:3], 1):  # Limit to top 3 results for brevity
+<<<<<<< HEAD
                 content = result.get('content', '') or ''
                 source = result.get('source', 'Unknown')
                 page = result.get('page', None)
@@ -123,6 +128,29 @@ Source: {source}
 {page_line}{section_line}Content: {excerpt}
 """
                 context_parts.append(context_part)
+=======
+                content = result.get('content', '')
+                source = result.get('source', 'Unknown')
+                page = result.get('page', 'N/A')
+                section = result.get('section', 'N/A')
+                
+                # Clean and format content using the dedicated utility
+                if content:
+                    content = clean_document_text(content)
+                    
+                    # Truncate if too long but preserve important information
+                    if len(content) > 2000:
+                        content = content[:1800] + "... [Content continues]"
+                    
+                    context_part = f"""
+Document {i}:
+Source: {source}
+Page: {page}
+Section: {section}
+Content: {content}
+"""
+                    context_parts.append(context_part)
+>>>>>>> clean-master
             
             return "\n" + "="*50 + "\n".join(context_parts) + "\n" + "="*50
             
@@ -131,6 +159,7 @@ Source: {source}
             return "Error processing document context."
     
     def _create_enhanced_prompt(self, query: str, context: str, index_name: str, answer_style: Optional[str] = None) -> str:
+<<<<<<< HEAD
         """
         Create concise, effective prompt for LLM responses
         Optimized for speed and token efficiency while maintaining quality
@@ -153,6 +182,40 @@ Instructions:
 6. Write naturally - don't use placeholder text or templates
 
 Analyze the documents and provide your answer:"""
+=======
+        """Create enhanced prompt for better LLM responses with optional style control."""
+        
+        style_note = "Narrative paragraph" if (answer_style or "").lower().startswith("narr") else "Concise bullet points (3-6 bullets)"
+
+        prompt = f"""You are an expert document analyst with access to comprehensive legal and corporate documents. 
+
+USER QUERY: {query}
+
+DOCUMENT CONTEXT FROM {index_name.upper()}:
+{context}
+
+INSTRUCTIONS:
+1. Provide a comprehensive, well-structured answer based ONLY on the document content above
+2. Include specific references to pages, sections, and sources where relevant
+3. If the query asks for "all information" or "comprehensive details", provide thorough coverage
+4. Structure your response with clear headings and bullet points for readability
+5. If information is incomplete, clearly state what is available and what might be missing
+6. Do not make assumptions beyond what is explicitly stated in the documents
+7. Cite specific page numbers and sections for all claims
+8. Do NOT include any "Source:" lines, raw URLs, or inline hyperlinks in the answer body. Keep all links exclusively for a separate "Sources" section handled by the application.
+9. Do NOT refer to documents by labels like "Document 1", "Document 2", etc. Write naturally and cite information by topic/section rather than numbered document labels.
+
+STYLE:
+- {style_note}
+
+RESPONSE FORMAT:
+- Start with a brief summary
+- Provide detailed information organized by topic
+- Include relevant citations and references
+- End with any limitations or additional context needed
+
+Please provide your comprehensive response:"""
+>>>>>>> clean-master
 
         return prompt
     
@@ -169,7 +232,11 @@ Analyze the documents and provide your answer:"""
                         provider = (cfg or {}).get("provider", "openai").lower()
                         model_id = (cfg or {}).get("model_id", "gpt-3.5-turbo")
                         temperature = 0.3
+<<<<<<< HEAD
                         max_tokens = 2000  # Increased for detailed responses
+=======
+                        max_tokens = 900
+>>>>>>> clean-master
 
                         if provider == "openai":
                             # Use direct OpenAI client to avoid LangChain version mismatches
@@ -249,7 +316,11 @@ Analyze the documents and provide your answer:"""
                 os.environ.pop("OPENAI_PROJECT", None)
             except Exception:
                 pass
+<<<<<<< HEAD
             llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.3, max_tokens=2000, request_timeout=60)
+=======
+            llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.3, max_tokens=900, request_timeout=60)
+>>>>>>> clean-master
             response = llm.invoke(prompt)
             return response.content if hasattr(response, "content") else str(response)
 
@@ -275,7 +346,11 @@ Analyze the documents and provide your answer:"""
                 resp = client.chat.completions.create(
                     model=model_id,
                     messages=messages,
+<<<<<<< HEAD
                     max_tokens=2000,
+=======
+                    max_tokens=800,
+>>>>>>> clean-master
                     temperature=0.3,
                 )
                 return (resp.choices[0].message.content or "").strip()
@@ -285,6 +360,7 @@ Analyze the documents and provide your answer:"""
                 return ""
     
     def _fallback_processing(self, query: str, retrieval_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+<<<<<<< HEAD
         """Fallback processing when LLM is not available - provides structured enterprise response"""
         try:
             # Import QueryResultFormatter for proper sentence extraction
@@ -446,6 +522,43 @@ Unable to process query due to system error: {str(e)[:100]}
 Unable to determine information gaps due to processing error""",
                 "source_documents": retrieval_results or [],
                 "context_used": len(retrieval_results) if retrieval_results else 0,
+=======
+        """Fallback processing when LLM is not available"""
+        try:
+            if not retrieval_results:
+                response = f"No relevant information found for query: '{query}'"
+            else:
+                # Create a basic response from retrieval results
+                response_parts = [f"Found {len(retrieval_results)} relevant results for: '{query}'\n"]
+                
+                for i, result in enumerate(retrieval_results[:3], 1):
+                    content = result.get('content', 'No content')
+                    source = result.get('source', 'Unknown')
+                    page = result.get('page', 'N/A')
+                    
+                    # Truncate content for readability
+                    if len(content) > 500:
+                        content = content[:450] + "..."
+                    
+                    response_parts.append(f"\n{i}. Source: {source} (Page: {page})\n{content}")
+                
+                response = "\n".join(response_parts)
+            
+            return {
+                "result": response,
+                "source_documents": retrieval_results,
+                "context_used": len(retrieval_results),
+                "processing_method": "fallback",
+                "query_processed": query
+            }
+            
+        except Exception as e:
+            logger.error(f"Fallback processing failed: {e}")
+            return {
+                "result": f"Error processing query: {str(e)}",
+                "source_documents": [],
+                "context_used": 0,
+>>>>>>> clean-master
                 "processing_method": "error"
             }
 

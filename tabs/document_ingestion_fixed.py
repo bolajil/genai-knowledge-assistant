@@ -6,6 +6,10 @@ Enhanced document ingestion with dual backend support (Weaviate + FAISS)
 
 import streamlit as st
 import os
+<<<<<<< HEAD
+=======
+from pathlib import Path
+>>>>>>> clean-master
 import logging
 from datetime import datetime
 import time
@@ -14,6 +18,7 @@ import pickle
 import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
+<<<<<<< HEAD
 import io
 from pathlib import Path
 
@@ -26,6 +31,11 @@ try:
 except Exception:
     PDF_READER_AVAILABLE = False
 
+=======
+
+logger = logging.getLogger(__name__)
+
+>>>>>>> clean-master
 # Import Weaviate components with fallback
 try:
     from utils.weaviate_ingestion_helper import WeaviateIngestionHelper
@@ -51,6 +61,10 @@ def render_document_ingestion(user, permissions, auth_middleware, available_inde
     
     # Log user action
     auth_middleware.log_user_action("ACCESS_DOCUMENT_INGESTION")
+<<<<<<< HEAD
+=======
+    
+>>>>>>> clean-master
     st.info("🔧 Updated version - Index validation fixed")
     
     # Get current user info
@@ -152,6 +166,7 @@ def render_weaviate_ingestion(username):
     
     # Source type selection
     st.subheader("📥 Document Source")
+<<<<<<< HEAD
     source_type = st.radio(
         "Select Source Type:",
         ["PDF File", "Text File", "Website URL"],
@@ -159,6 +174,12 @@ def render_weaviate_ingestion(username):
         horizontal=True,
         key="weaviate_ingest_source_type",
         help="Choose the content source. 'Website URL' will scrape and index web content."
+=======
+    source_type = st.selectbox(
+        "Select Source Type:",
+        ["PDF File", "Text File", "Website URL"],
+        key="weaviate_ingest_source_type"
+>>>>>>> clean-master
     )
     
     # Chunking configuration
@@ -454,6 +475,7 @@ def render_faiss_ingestion(username):
     
     # Source type selection
     st.subheader("📥 Document Source")
+<<<<<<< HEAD
     source_type = st.radio(
         "Select Source Type:",
         ["PDF File", "Text File", "Website URL"],
@@ -461,6 +483,12 @@ def render_faiss_ingestion(username):
         horizontal=True,
         key="faiss_ingest_source_type",
         help="Choose the content source. 'Website URL' will scrape and index web content."
+=======
+    source_type = st.selectbox(
+        "Select Source Type:",
+        ["PDF File", "Text File", "Website URL"],
+        key="faiss_ingest_source_type"
+>>>>>>> clean-master
     )
     
     # Chunking configuration
@@ -514,7 +542,10 @@ def render_faiss_ingestion(username):
                     )
                 
                 # Process documents
+<<<<<<< HEAD
                 page_count = None  # will be set for PDFs if available
+=======
+>>>>>>> clean-master
                 if source_type == "PDF File" and uploaded_file:
                     status_text.text("📄 Processing PDF...")
                     
@@ -528,6 +559,7 @@ def render_faiss_ingestion(username):
                         from utils.robust_pdf_extractor import extract_text_from_pdf_robust, validate_extraction_quality
                         
                         pdf_bytes = uploaded_file.getvalue()
+<<<<<<< HEAD
                         # Try to count PDF pages if library is available
                         if PDF_READER_AVAILABLE:
                             try:
@@ -535,6 +567,8 @@ def render_faiss_ingestion(username):
                                 page_count = len(reader.pages)
                             except Exception:
                                 page_count = None
+=======
+>>>>>>> clean-master
                         text_content, method = extract_text_from_pdf_robust(pdf_bytes, uploaded_file.name)
                         
                         if text_content:
@@ -599,6 +633,7 @@ def render_faiss_ingestion(username):
                         f.write(f"URL: {url_input}\nRender JS: {render_js}\nDepth: {max_depth}")
                     progress_bar.progress(30)
                     
+<<<<<<< HEAD
                     # Try to fetch content from URL
                     try:
                         import requests
@@ -634,6 +669,12 @@ def render_faiss_ingestion(username):
                         # Fallback minimal content
                         with open(index_dir / "extracted_content.txt", "w", encoding="utf-8") as f:
                             f.write(f"Website content placeholder for {url_input}")
+=======
+                    # Create placeholder content
+                    placeholder_content = f"Website content from {url_input}\nProcessed with depth {max_depth}"
+                    with open(index_dir / "extracted_content.txt", "w", encoding="utf-8") as f:
+                        f.write(placeholder_content)
+>>>>>>> clean-master
                 
                 # Build FAISS index so Query/Chat/Agent tabs can discover it
                 # Find a text file to embed
@@ -671,10 +712,13 @@ def render_faiss_ingestion(username):
                     chunk = text_to_embed[i : i + chunk_size]
                     if chunk:
                         chunks.append(chunk)
+<<<<<<< HEAD
                 # Compute ingestion metrics
                 total_chunks = len(chunks)
                 total_chars = len(text_to_embed)
                 approx_tokens = total_chars // 4  # rough heuristic
+=======
+>>>>>>> clean-master
                 model = SentenceTransformer("all-MiniLM-L6-v2")
                 embs = model.encode(
                     chunks,
@@ -719,10 +763,13 @@ def render_faiss_ingestion(username):
                 **Location:** {index_dir}
                 **FAISS Vectors:** data/faiss_index/{index_name}
                 **Embedding Engine:** SentenceTransformer (all-MiniLM-L6-v2)
+<<<<<<< HEAD
                 **Pages (PDF):** {page_count if page_count is not None else 'N/A'}
                 **Chunks Created:** {total_chunks}
                 **Characters:** {total_chars}
                 **~Tokens (est.):** {approx_tokens}
+=======
+>>>>>>> clean-master
                 **Created:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 """
                 )

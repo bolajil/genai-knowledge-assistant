@@ -16,6 +16,7 @@ import concurrent.futures
 import os
 from utils.vector_db_provider import get_vector_db_provider
 from utils.weaviate_manager import get_weaviate_manager
+<<<<<<< HEAD
 from utils.multi_source_search import search_web_api
 
 # Import VaultMind utilities (graceful when optional deps missing)
@@ -59,6 +60,16 @@ except ImportError as e:
         return None
     def validate_llm_setup(model_name):
         return (False, "Provider not configured")
+=======
+
+# Import VaultMind utilities
+try:
+    from utils.unified_vector_store import get_vector_store
+    from utils.unified_search_engine import query_with_llm_unified, search_index_unified
+    from utils.llm_config import get_available_llm_models, get_default_llm_model, get_llm_model_config, validate_llm_setup
+except ImportError as e:
+    st.error(f"Failed to import VaultMind utilities: {e}")
+>>>>>>> clean-master
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +193,7 @@ class EnhancedChatAssistant:
         # Lazy import to avoid top-level dependency failures
         try:
             from openai import OpenAI
+<<<<<<< HEAD
         except ImportError as ie:
             logger.error(f"OpenAI library not installed: {ie}")
             raise RuntimeError("OpenAI library not installed. Run: pip install openai")
@@ -201,6 +213,25 @@ class EnhancedChatAssistant:
         except Exception as e:
             logger.error(f"Failed to create OpenAI client: {e}", exc_info=True)
             raise RuntimeError(f"Failed to create OpenAI client: {str(e)}")
+=======
+        except ImportError:
+            logger.error("OpenAI library not installed")
+            return None
+        
+        api_key = os.getenv("OPENAI_API_KEY")
+        
+        # Create client with minimal parameters to avoid any parameter errors
+        try:
+            if api_key:
+                # Only pass api_key, nothing else
+                return OpenAI(api_key=api_key)
+            else:
+                # Try default initialization
+                return OpenAI()
+        except Exception as e:
+            logger.error(f"Failed to create OpenAI client: {e}")
+            return None
+>>>>>>> clean-master
     
     def search_documents(self, query: str, selected_indexes: List[str], top_k: int = 5) -> List[Dict[str, Any]]:
         """Search documents across selected indexes"""
@@ -301,6 +332,7 @@ class EnhancedChatAssistant:
         results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
         return results[:top_k]
     
+<<<<<<< HEAD
     def _build_context_from_web_results(self, web_results: List[Dict[str, Any]]) -> str:
         """Compose a context string from web search results."""
         if not web_results:
@@ -381,6 +413,8 @@ class EnhancedChatAssistant:
             logger.warning(f"Web search fallback failed: {e}")
             return None
     
+=======
+>>>>>>> clean-master
     def generate_response(self, query: str, selected_indexes: List[str], model_name: str, 
                          use_context: bool = True, selected_sources: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         """Generate intelligent response using RAG pipeline"""
@@ -461,6 +495,7 @@ class EnhancedChatAssistant:
                 logger.info(f"--- generate_response finished with fallback in {time.time() - start_time:.2f} seconds ---")
                 return fallback_response
         
+<<<<<<< HEAD
         # If no doc results, try web search + LLM synthesis with sources
         web_resp = self._web_search_and_answer(query, model_name, conversation_context)
         if web_resp:
@@ -474,6 +509,14 @@ class EnhancedChatAssistant:
         direct_response = self._generate_direct_llm_response(query, model_name, conversation_context)
         llm_end_time = time.time()
         logger.info(f"LLM generation (direct) took {llm_end_time - direct_llm_start_time:.2f} seconds.")
+=======
+        # Fallback to direct LLM query without document context
+        logger.info("No documents selected or found. Using direct LLM response.")
+        direct_llm_start_time = time.time()
+        direct_response = self._generate_direct_llm_response(query, model_name, conversation_context)
+        llm_end_time = time.time()
+        logger.info(f"LLM generation (direct) took {llm_end_time - llm_start_time:.2f} seconds.")
+>>>>>>> clean-master
         logger.info(f"--- generate_response finished in {time.time() - start_time:.2f} seconds ---")
         return direct_response
     
@@ -697,6 +740,7 @@ Content extracted from multiple document sources with relevance scoring applied.
             
             # Generate response based on provider
             if provider == 'openai':
+<<<<<<< HEAD
                 try:
                     client = self._create_openai_client()
                     
@@ -735,6 +779,39 @@ Content extracted from multiple document sources with relevance scoring applied.
                 except Exception as openai_error:
                     logger.error(f"OpenAI API error: {openai_error}", exc_info=True)
                     raise
+=======
+                client = self._create_openai_client()
+                
+                messages = [
+                    {
+                        "role": "system",
+                        # Add brevity guidance to avoid excessive output
+                        "content": "You are VaultMind AI Assistant, a helpful and knowledgeable AI. Provide accurate responses concisely. Use at most ~6 bullet points or ~250-350 words."
+                    }
+                ]
+                
+                if context_str:
+                    messages.append({
+                        "role": "system", 
+                        "content": f"Recent conversation context:\n{context_str}"
+                    })
+                
+                messages.append({"role": "user", "content": query})
+                
+                logger.info(f"Calling OpenAI API with model: {model_id}")
+                api_start_time = time.time()
+                response = client.chat.completions.create(
+                    model=model_id,
+                    messages=messages,
+                    # Lower token cap to reduce timeout risk
+                    max_tokens=500,
+                    temperature=0.7
+                )
+                api_end_time = time.time()
+                logger.info(f"OpenAI API call finished in {api_end_time - api_start_time:.2f} seconds.")
+                
+                llm_response = response.choices[0].message.content
+>>>>>>> clean-master
             
             elif provider == 'anthropic':
                 import anthropic
@@ -1395,6 +1472,7 @@ def render_chat_assistant(user, permissions, auth_middleware):
     chat_assistant = st.session_state.chat_assistant
 
     # --- Sidebar Configuration ---
+<<<<<<< HEAD
     _global_sidebar_rendered = st.session_state.get("_global_sidebar_rendered", False)
 
     if _global_sidebar_rendered:
@@ -1555,6 +1633,126 @@ def render_chat_assistant(user, permissions, auth_middleware):
                     st.markdown(f'<div class="status-indicator status-online">Vector DB: {"✅ Ready" if vector_store and vector_store.is_ready() else "⚠️ Not Initialized"}</div>', unsafe_allow_html=True)
                 except Exception as e:
                     st.markdown(f'<div class="status-indicator status-offline">Vector DB: ❌ Error</div>', unsafe_allow_html=True)
+=======
+    with st.sidebar:
+        st.markdown("""
+        <div class="sidebar-section">
+            <h2 class="sidebar-header">Configuration</h2>
+            <p class="sidebar-subheader">Customize your AI assistant settings</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.container(border=True):
+            st.markdown("**AI Model**")
+            available_models = get_available_llm_models()
+            default_model = get_default_llm_model()
+            if 'selected_model' not in st.session_state:
+                st.session_state.selected_model = default_model
+
+            if available_models and available_models[0] != "No LLM models available - Please check API keys in .env file":
+                st.session_state.selected_model = st.selectbox(
+                    "Select Model:",
+                    options=available_models,
+                    index=available_models.index(st.session_state.selected_model) if st.session_state.selected_model in available_models else 0,
+                    label_visibility="collapsed"
+                )
+            else:
+                st.warning(available_models[0])
+
+        with st.container(border=True):
+            st.markdown("**Knowledge Base**")
+            use_documents = st.checkbox("Enable document search", value=st.session_state.get('enable_doc_search', True))
+            st.session_state.enable_doc_search = use_documents
+
+            if use_documents:
+                # Unified backend selector
+                backend_choice = st.radio(
+                    "Search Backend:",
+                    ["Weaviate (Cloud Vector DB)", "FAISS (Local Index)", "Both"],
+                    horizontal=True,
+                    key="chat_backend",
+                    help="Choose where to search: cloud Weaviate, local FAISS, or both"
+                )
+
+                # Discover sources
+                faiss_options: List[str] = []
+                weaviate_options: List[str] = []
+                try:
+                    vdb = get_vector_db_provider()
+                    discovered = vdb.get_available_indexes(force_refresh=True)
+                    faiss_options = [n for n in discovered if vdb.find_index_path(n)]
+                except Exception:
+                    faiss_options = []
+                try:
+                    wm = get_weaviate_manager()
+                    weaviate_options = wm.list_collections() or []
+                except Exception:
+                    weaviate_options = []
+
+                # Selectors per backend
+                selected_weaviate: List[str] = st.session_state.get("chat_weaviate_cols", [])
+                selected_faiss: List[str] = st.session_state.get("chat_faiss_indexes", [])
+
+                if backend_choice in ("Weaviate (Cloud Vector DB)", "Both"):
+                    selected_weaviate = st.multiselect(
+                        "Weaviate collections:",
+                        options=weaviate_options,
+                        default=selected_weaviate,
+                        key="chat_weaviate_cols"
+                    )
+                else:
+                    st.session_state.pop("chat_weaviate_cols", None)
+
+                if backend_choice in ("FAISS (Local Index)", "Both"):
+                    selected_faiss = st.multiselect(
+                        "Local FAISS indexes:",
+                        options=faiss_options,
+                        default=selected_faiss,
+                        key="chat_faiss_indexes"
+                    )
+                else:
+                    st.session_state.pop("chat_faiss_indexes", None)
+
+                # Compose selected sources for downstream usage (do not mutate widget-bound keys)
+                sources: List[Dict[str, str]] = []
+                if backend_choice in ("Weaviate (Cloud Vector DB)", "Both") and selected_weaviate:
+                    for name in selected_weaviate:
+                        sources.append({"name": name, "backend": "weaviate"})
+                if backend_choice in ("FAISS (Local Index)", "Both") and selected_faiss:
+                    for name in selected_faiss:
+                        sources.append({"name": name, "backend": "faiss"})
+
+                # Maintain legacy compatibility fields used elsewhere
+                st.session_state.selected_chat_indexes = [s["name"] for s in sources]
+                st.session_state.chat_selected_sources = sources
+            else:
+                st.session_state.selected_chat_indexes = []
+                st.session_state.chat_selected_sources = []
+
+        with st.container(border=True):
+            st.markdown("**Settings**")
+            use_memory = st.checkbox("Conversation memory", value=st.session_state.get('conversation_memory', True))
+            st.session_state.conversation_memory = use_memory
+
+            with st.expander("Advanced Options"):
+                if st.button("Clear Conversation History"):
+                    chat_assistant.conversation_manager.clear_history()
+                    st.rerun()
+                if st.button("↻ Refresh Indexes"):
+                    st.session_state.chat_assistant = EnhancedChatAssistant()
+                    st.rerun()
+
+        with st.container(border=True):
+            st.markdown("**System Status**")
+            llm_ok, llm_message = validate_llm_setup(st.session_state.get('selected_model', default_model))
+            st.markdown(f'<div class="status-indicator status-online">LLM: {"✅" if llm_ok else "❌"} {llm_message}</div>', unsafe_allow_html=True)
+            
+            try:
+                vector_store = get_vector_store()
+                st.markdown(f'<div class="status-indicator status-online">Vector DB: {"✅ Ready" if vector_store and vector_store.is_ready() else "⚠️ Not Initialized"}</div>', unsafe_allow_html=True)
+            except Exception as e:
+                st.markdown(f'<div class="status-indicator status-offline">Vector DB: ❌ Error</div>', unsafe_allow_html=True)
+>>>>>>> clean-master
 
     # --- Main Chat UI ---
     # Add clear chat button at the top
@@ -1570,7 +1768,11 @@ def render_chat_assistant(user, permissions, auth_middleware):
         chat_assistant.conversation_manager.add_message("assistant", welcome_message, {"response_type": "welcome"})
 
     # Display chat history
+<<<<<<< HEAD
     for idx, message in enumerate(st.session_state.get("chat_history", [])):
+=======
+    for message in st.session_state.get("chat_history", []):
+>>>>>>> clean-master
         with st.chat_message(message["role"]):
             st.markdown(message["content"], unsafe_allow_html=True)
             
@@ -1606,6 +1808,7 @@ def render_chat_assistant(user, permissions, auth_middleware):
                                     st.markdown(f"**Source {i+1}: {res.get('source', 'Unknown')}**")
                                     st.markdown(f"*Relevance Score: {res.get('score', 0.0):.3f}* | *Index: {res.get('index_source', 'N/A')}*")
                                     st.text_area("Content Excerpt", value=res.get('content', ''), height=150, disabled=True, key=f"source_{message['timestamp']}_{i}")
+<<<<<<< HEAD
                     
                     # Feedback buttons for Chat Assistant
                     try:
@@ -1627,6 +1830,8 @@ def render_chat_assistant(user, permissions, auth_middleware):
                             )
                     except Exception as feedback_error:
                         logger.warning(f"Failed to render chat feedback buttons: {feedback_error}")
+=======
+>>>>>>> clean-master
 
     # Handle user input
     if prompt := st.chat_input("Ask me anything about your documents..."):

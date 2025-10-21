@@ -215,6 +215,7 @@ Please provide a detailed, accurate response based solely on the document conten
             except Exception as e:
                 print(f"Enterprise retrieval failed, falling back to real-time: {e}")
             
+<<<<<<< HEAD
             # New: Try standard retriever (FAISS or text) before real-time disk read
             try:
                 retriever = get_valid_retriever(index_name)
@@ -253,6 +254,8 @@ Please provide a detailed, accurate response based solely on the document conten
                     # If retriever path fails, continue to real-time fallback below
                     pass
 
+=======
+>>>>>>> clean-master
             # Fallback to real-time retrieval
             from utils.real_time_retrieval import get_real_time_retriever, verify_fresh_content
             

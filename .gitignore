@@ -175,6 +175,7 @@ config/*.env.bak
 *.log
 logs/
 mcp_logs.db
+<<<<<<< HEAD
 
 # ============================================================
 # API Keys and Secrets - NEVER COMMIT THESE
@@ -245,3 +246,5 @@ config/*.env.bak
 *.log
 logs/
 mcp_logs.db
+=======
+>>>>>>> clean-master
