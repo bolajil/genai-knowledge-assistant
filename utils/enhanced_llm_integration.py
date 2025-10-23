@@ -63,6 +63,16 @@ class EnhancedLLMProcessor:
             
             # Get LLM response with proper context handling
             llm_response = self._get_llm_response(enhanced_prompt, model_name=(model_name or self.model_name))
+            # If LLM returned empty or too-short content, fall back to structured synthesis
+            if not llm_response or len(str(llm_response).strip()) < 50:
+                logger.warning("LLM returned empty/too-short response; using fallback_enhanced")
+                fb = self._fallback_processing(query, retrieval_results)
+                try:
+                    # Preserve method label for UI
+                    fb["processing_method"] = "fallback_enhanced"
+                except Exception:
+                    pass
+                return fb
             
             # Format final response
             return {
