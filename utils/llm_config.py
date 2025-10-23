@@ -25,6 +25,22 @@ class LLMConfig:
         # OpenAI Models
         if os.getenv("OPENAI_API_KEY"):
             models.update({
+                "gpt-4o": {
+                    "name": "OpenAI GPT-4o",
+                    "provider": "openai",
+                    "model_id": "gpt-4o",
+                    "max_tokens": 128000,
+                    "supports_chat": True,
+                    "cost_tier": "premium"
+                },
+                "gpt-4o-mini": {
+                    "name": "OpenAI GPT-4o Mini",
+                    "provider": "openai",
+                    "model_id": "gpt-4o-mini",
+                    "max_tokens": 128000,
+                    "supports_chat": True,
+                    "cost_tier": "standard"
+                },
                 "gpt-4": {
                     "name": "OpenAI GPT-4",
                     "provider": "openai",
@@ -218,8 +234,8 @@ class LLMConfig:
         if not self.available_models:
             return "No models available"
         
-        # Preferred order: GPT-3.5 Turbo, Claude 3 Haiku, Ollama models, any available
-        preferred_models = ["gpt-3.5-turbo", "claude-3-haiku", "llama3-8b", "mistral"]
+        # Preferred order: GPT-4o Mini, GPT-3.5 Turbo, Claude 3 Haiku, Ollama, any available
+        preferred_models = ["gpt-4o-mini", "gpt-3.5-turbo", "claude-3-haiku", "llama3-8b", "mistral"]
         
         for model_id in preferred_models:
             if model_id in self.available_models:

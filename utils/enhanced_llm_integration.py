@@ -21,9 +21,12 @@ class EnhancedLLMProcessor:
     """Enhanced LLM processor that properly handles vector retrieval results"""
     
     def __init__(self, model_name: Optional[str] = None):
-        # Remove env var that can cause older SDKs to receive an unsupported 'project' kwarg
+        # Sanitize environment for provider SDKs (avoid unsupported args and forced proxies)
         try:
             os.environ.pop("OPENAI_PROJECT", None)
+            os.environ.pop("OPENAI_PROXIES", None)
+            os.environ.pop("HTTP_PROXY", None)
+            os.environ.pop("HTTPS_PROXY", None)
         except Exception:
             pass
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -36,6 +39,7 @@ class EnhancedLLMProcessor:
             os.getenv("OLLAMA_BASE_URL"),
         ])
         self.model_name = model_name
+        self.last_model_used: Optional[str] = None
         
     def process_retrieval_results(self, query: str, retrieval_results: List[Dict[str, Any]], 
                                 index_name: str, model_name: Optional[str] = None, answer_style: Optional[str] = None) -> Dict[str, Any]:
@@ -81,7 +85,8 @@ class EnhancedLLMProcessor:
                 "context_used": len(retrieval_results),
                 "processing_method": "enhanced_llm",
                 "query_processed": query,
-                "index_name": index_name
+                "index_name": index_name,
+                "model_used": self.last_model_used
             }
             
         except Exception as e:
@@ -198,18 +203,39 @@ Analyze the documents and provide your answer:"""
                                     {"role": "system", "content": "You are VaultMind Research Assistant. Provide accurate, concise answers. Do not include inline URLs or 'Source' lines."},
                                     {"role": "user", "content": prompt},
                                 ]
-                                resp = client.chat.completions.create(
-                                    model=model_id,
-                                    messages=messages,
-                                    max_tokens=max_tokens,
-                                    temperature=temperature,
-                                )
-                                text = (resp.choices[0].message.content or "").strip()
-                                return text
+                                # Try selected model then smart fallbacks
+                                fallback_models = [model_id, "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]
+                                last_err = None
+                                for mid in fallback_models:
+                                    try:
+                                        resp = client.chat.completions.create(
+                                            model=mid,
+                                            messages=messages,
+                                            max_tokens=max_tokens,
+                                            temperature=temperature,
+                                        )
+                                        self.last_model_used = mid
+                                        text = (resp.choices[0].message.content or "").strip()
+                                        if text:
+                                            return text
+                                    except Exception as _try_err:
+                                        last_err = _try_err
+                                        continue
+                                # If all attempts failed, raise the last error to trigger LC fallback
+                                raise last_err or RuntimeError("OpenAI call failed for all models")
                             except Exception as _e_openai:
                                 # Fall back to LangChain OpenAI if direct client fails for any reason
                                 from langchain_openai import ChatOpenAI
-                                llm = ChatOpenAI(model=model_id, temperature=temperature, max_tokens=max_tokens, request_timeout=60)
+                                # Try LC with fallback chain as well
+                                for mid in [model_id, "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]:
+                                    try:
+                                        llm = ChatOpenAI(model=mid, temperature=temperature, max_tokens=max_tokens, request_timeout=60)
+                                        response = llm.invoke(prompt)
+                                        self.last_model_used = mid
+                                        return response.content if hasattr(response, "content") else str(response)
+                                    except Exception:
+                                        continue
+                                raise
                         elif provider == "anthropic":
                             try:
                                 from langchain_anthropic import ChatAnthropic
@@ -260,6 +286,7 @@ Analyze the documents and provide your answer:"""
             except Exception:
                 pass
             llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.3, max_tokens=2000, request_timeout=60)
+            self.last_model_used = "gpt-3.5-turbo"
             response = llm.invoke(prompt)
             return response.content if hasattr(response, "content") else str(response)
 
@@ -282,13 +309,19 @@ Analyze the documents and provide your answer:"""
                     {"role": "system", "content": "You are VaultMind Research Assistant. Provide accurate, concise answers based only on the provided prompt. Do not include inline URLs or 'Source' lines."},
                     {"role": "user", "content": prompt},
                 ]
-                resp = client.chat.completions.create(
-                    model=model_id,
-                    messages=messages,
-                    max_tokens=2000,
-                    temperature=0.3,
-                )
-                return (resp.choices[0].message.content or "").strip()
+                for mid in [model_id, "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]:
+                    try:
+                        resp = client.chat.completions.create(
+                            model=mid,
+                            messages=messages,
+                            max_tokens=2000,
+                            temperature=0.3,
+                        )
+                        self.last_model_used = mid
+                        return (resp.choices[0].message.content or "").strip()
+                    except Exception:
+                        continue
+                return ""
             except Exception as e2:
                 logger.error(f"Direct OpenAI fallback failed: {e2}")
                 # Return empty string so upstream caller can apply its own fallback
@@ -436,7 +469,8 @@ All requested information needs to be sourced from alternative documents or data
                 "sources": [{"source": r.get('source', 'Unknown'), "page": r.get('page')} for r in retrieval_results[:5]],
                 "context_used": len(retrieval_results),
                 "processing_method": "fallback_enhanced",
-                "query_processed": query
+                "query_processed": query,
+                "model_used": self.last_model_used
             }
 
         except Exception as e:
