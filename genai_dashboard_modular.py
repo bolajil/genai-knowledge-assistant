@@ -163,6 +163,35 @@ def render_global_sidebar(available_indexes: list):
             except Exception:
                 pass
 
+        # Quick provider test to surface misconfiguration/SDK issues
+        cols = st.columns([1,1])
+        with cols[0]:
+            if st.button("Test LLM", use_container_width=True, key="btn_test_llm"):
+                try:
+                    from utils.llm_config import validate_llm_setup as _v, get_default_llm_model as _gdef
+                    from utils.enhanced_llm_integration import EnhancedLLMProcessor as _ELP
+                    model_to_test = st.session_state.get("global_model") or _gdef()
+                    ok, msg = _v(model_to_test)
+                    if not ok:
+                        st.error(f"LLM not ready: {msg}. Select a model that matches a configured provider in the dropdown above.")
+                    else:
+                        proc = _ELP()
+                        # Minimal test: one small context chunk
+                        test_resp = proc.process_retrieval_results(
+                            query="Short readiness check: summarize the context succinctly.",
+                            retrieval_results=[{"content": "This is a minimal context for an LLM readiness test.", "source": "diagnostics"}],
+                            index_name="diagnostics",
+                            model_name=model_to_test,
+                        )
+                        method = test_resp.get("processing_method")
+                        result = (test_resp.get("result") or "").strip()
+                        if method == "enhanced_llm" and len(result) > 40:
+                            st.success(f"LLM test OK with {model_to_test}.")
+                        else:
+                            st.warning("LLM call did not return a full response; falling back. Check that the provider SDK is installed and the key is valid.")
+                except Exception as _e_diag:
+                    st.error(f"LLM test failed: {_e_diag}")
+
         st.divider()
         # Optional Vector DB (Weaviate) override (session-only)
         st.session_state["use_custom_weaviate"] = st.checkbox(
