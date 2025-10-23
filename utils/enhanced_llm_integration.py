@@ -101,7 +101,8 @@ class EnhancedLLMProcessor:
             
             context_parts = []
             
-            for i, result in enumerate(retrieval_results[:3], 1):  # Limit to top 3 results for brevity
+            # Include more top results to give the LLM richer context
+            for i, result in enumerate(retrieval_results[:6], 1):  # Use up to top 6 results
                 content = result.get('content', '') or ''
                 source = result.get('source', 'Unknown')
                 page = result.get('page', None)
@@ -125,9 +126,10 @@ class EnhancedLLMProcessor:
                 ]
                 if not sentences:
                     continue
-                excerpt = ' '.join(sentences[:3])
-                if len(excerpt) > 1800:
-                    excerpt = excerpt[:1797] + '...'
+                # Keep more sentences per document to avoid vague answers
+                excerpt = ' '.join(sentences[:5])
+                if len(excerpt) > 2800:
+                    excerpt = excerpt[:2797] + '...'
                 
                 page_line = f"Page: {page}\n" if (isinstance(page, int) or (isinstance(page, str) and page.isdigit())) else ""
                 section_line = f"Section: {section}\n" if section else ""
@@ -151,23 +153,40 @@ Source: {source}
         Optimized for speed and token efficiency while maintaining quality
         """
         
-        # Natural prompt - let LLM analyze and respond intelligently
-        prompt = f"""You are VaultMind Assistant, an intelligent document analyst. Read the documents carefully and answer the user's question with thorough analysis and proper citations.
+        # Natural prompt with enterprise analysis requirements
+        style = (answer_style or "analytical_enterprise").lower()
+        prompt = f"""You are VaultMind Assistant, an intelligent enterprise document analyst. Read the DOCUMENTS and answer the USER QUESTION with precise, well-supported reasoning.
 
 DOCUMENTS:
 {context}
 
 USER QUESTION: {query}
 
-Instructions:
-1. Read and analyze the documents to understand what they say about the question
-2. Provide a comprehensive answer using ONLY information from the documents
-3. Cite your sources by referencing document numbers (e.g., "Document 1") or page numbers when available
-4. Organize your response with clear sections: Executive Summary, Detailed Answer, and Key Points
-5. Be thorough - include all relevant details, not just brief summaries
-6. Write naturally - don't use placeholder text or templates
+Guidelines:
+- Ground every statement in the provided documents only. Do not speculate.
+- When you state a fact, cite it using [Doc N] and, if available, page like [Doc N, p. X].
+- Prefer quoting short, exact phrases when they carry legal/financial meaning.
+- Be specific. Avoid generic statements. Extract concrete names, amounts, dates, obligations, and limitations.
 
-Analyze the documents and provide your answer:"""
+Output structure:
+1) Executive Summary
+   - One paragraph of the most important conclusions and their implications.
+2) Detailed Analysis
+   - Intent of the document(s) and scope.
+   - Core Powers / Rights granted.
+   - Governance & Decision-Making (who approves, thresholds, timelines).
+   - Obligations & Constraints (requirements, conditions, limitations).
+   - Financial/Quantitative Details (amounts, rates, dates) if present.
+   - Risks, Exceptions, and Edge Cases.
+   - Each point must include citations like [Doc 2, p. 3].
+3) Key Points
+   - 4–8 concise bullets, each with a citation.
+4) Information Gaps & Next Steps
+   - What is missing or ambiguous, and what to check next, with suggested searches.
+
+Tone: precise, concise, and professional. Do not include URLs or a separate Sources section; use inline citations as specified.
+
+Now produce the analysis."""
 
         return prompt
     
@@ -183,8 +202,8 @@ Analyze the documents and provide your answer:"""
                         cfg = get_llm_model_config(model_name)
                         provider = (cfg or {}).get("provider", "openai").lower()
                         model_id = (cfg or {}).get("model_id", "gpt-3.5-turbo")
-                        temperature = 0.3
-                        max_tokens = 2000  # Increased for detailed responses
+                        temperature = 0.2
+                        max_tokens = 2200  # Increased for detailed responses
 
                         if provider == "openai":
                             # Use direct OpenAI client to avoid LangChain version mismatches
@@ -285,7 +304,7 @@ Analyze the documents and provide your answer:"""
                 os.environ.pop("OPENAI_PROJECT", None)
             except Exception:
                 pass
-            llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.3, max_tokens=2000, request_timeout=60)
+            llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.2, max_tokens=2200, request_timeout=60)
             self.last_model_used = "gpt-3.5-turbo"
             response = llm.invoke(prompt)
             return response.content if hasattr(response, "content") else str(response)
