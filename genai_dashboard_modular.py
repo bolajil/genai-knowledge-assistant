@@ -75,6 +75,9 @@ def render_global_sidebar(available_indexes: list):
         pass
 
     with st.sidebar.expander("Bring Your Own Keys (Session)", expanded=False):
+        # Track if any provider key changed this run
+        key_changes = False
+
         # OpenAI API Key (session-only)
         user_api_key = st.text_input(
             "OpenAI API Key",
@@ -87,9 +90,9 @@ def render_global_sidebar(available_indexes: list):
             st.session_state["user_api_key"] = user_api_key
             os.environ["OPENAI_API_KEY"] = user_api_key
             st.success("OpenAI key applied for this session.")
+            key_changes = True
 
         # Additional provider keys (session-only)
-        key_changes = False
         anth_key = st.text_input(
             "Anthropic API Key",
             type="password",
