@@ -171,12 +171,15 @@ def render_global_sidebar(available_indexes: list):
         with cols[0]:
             if st.button("Test LLM", use_container_width=True, key="btn_test_llm"):
                 try:
-                    from utils.llm_config import validate_llm_setup as _v, get_default_llm_model as _gdef
+                    # Reload LLM config to pick up any just-entered keys
+                    import importlib, utils.llm_config as _llmc
+                    _llmc = importlib.reload(_llmc)
                     from utils.enhanced_llm_integration import EnhancedLLMProcessor as _ELP
-                    model_to_test = st.session_state.get("global_model") or _gdef()
-                    ok, msg = _v(model_to_test)
+                    model_to_test = st.session_state.get("global_model") or _llmc.get_default_llm_model()
+                    ok, msg = _llmc.validate_llm_setup(model_to_test)
                     if not ok:
-                        st.error(f"LLM not ready: {msg}. Select a model that matches a configured provider in the dropdown above.")
+                        detected = ", ".join(_llmc.get_available_llm_models() or [])
+                        st.error(f"LLM not ready: {msg}. Detected models: {detected if detected else 'none'}. Select a model that matches a configured provider in the dropdown above.")
                     else:
                         proc = _ELP()
                         # Minimal test: one small context chunk
