@@ -18,6 +18,16 @@ googlesearch-python
 pydantic>=2,<3
 beautifulsoup4
 
+# LLM providers and LangChain integrations (added)
+openai>=1.30.0
+langchain-openai
+anthropic
+langchain-anthropic
+mistralai
+langchain-mistralai
+groq
+langchain-groq
+
 # Authentication and Security Dependencies
 streamlit-authenticator==0.2.3
 bcrypt==4.0.1
