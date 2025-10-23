@@ -6,16 +6,13 @@ Enhanced document ingestion with dual backend support (Weaviate + FAISS)
 
 import streamlit as st
 import os
+from pathlib import Path
 import logging
 from datetime import datetime
-import time
 import json
 import pickle
-import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer
 import io
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +22,19 @@ try:
     PDF_READER_AVAILABLE = True
 except Exception:
     PDF_READER_AVAILABLE = False
+
+# Optional heavy dependencies (guarded to prevent import-time failure)
+try:
+    import faiss  # type: ignore
+    FAISS_AVAILABLE = True
+except Exception:
+    FAISS_AVAILABLE = False
+
+try:
+    from sentence_transformers import SentenceTransformer  # type: ignore
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except Exception:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
 
 # Import Weaviate components with fallback
 try:
@@ -499,6 +509,11 @@ def render_faiss_ingestion(username):
             status_text = st.empty()
             
             try:
+                # Validate optional dependencies needed for FAISS ingestion
+                if not SENTENCE_TRANSFORMERS_AVAILABLE:
+                    raise RuntimeError("SentenceTransformers not installed. Install with: pip install sentence-transformers")
+                if not FAISS_AVAILABLE:
+                    raise RuntimeError("FAISS is not installed. Install with: pip install faiss-cpu (Windows/macOS) or use conda on some platforms")
                 # Create index directory
                 index_dir = Path("data") / "indexes" / index_name
                 index_dir.mkdir(parents=True, exist_ok=True)

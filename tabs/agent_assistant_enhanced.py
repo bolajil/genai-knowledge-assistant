@@ -113,7 +113,7 @@ try:
     from app.mcp.protocol import ModelContext # Assuming this is the correct path
     CONTROLLER_AGENT_AVAILABLE = True
     logger.info("Successfully imported controller agent components.")
-except ImportError as e:
+except Exception as e:
     CONTROLLER_AGENT_AVAILABLE = False
     logger.error(f"Controller agent components not available: {e}")
     # Define a dummy ModelContext if it's not available

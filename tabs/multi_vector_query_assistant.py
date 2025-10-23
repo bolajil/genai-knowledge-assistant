@@ -34,7 +34,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-def render_multi_vector_query_assistant():
+def render_multi_vector_query_assistant(user=None, permissions=None, auth_middleware=None, available_indexes=None):
     """Render the multi-vector query assistant interface"""
     
     st.title("🔍 Multi-Vector Query Assistant")
