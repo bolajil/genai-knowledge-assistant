@@ -5,11 +5,8 @@ Formats query responses with professional markdown structure based on intent
 
 from typing import List, Dict, Any
 import logging
-<<<<<<< HEAD
 import re
 from utils.text_cleaning import clean_document_text
-=======
->>>>>>> clean-master
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +62,6 @@ class EnterpriseResponseFormatter:
     
     def _format_factual(self, query: str, results: List[Dict], confidence: float) -> str:
         """Format concise factual answer"""
-<<<<<<< HEAD
         ql = (query or '').lower()
         # If benefits intent sneaks through to formatter, build concise benefit bullets
         if any(k in ql for k in ['benefit', 'benefits', 'advantage', 'value']):
@@ -141,11 +137,6 @@ class EnterpriseResponseFormatter:
         # Default concise factual answer: clean content to remove noisy recorder headers
         top_result = results[0]
         content = clean_document_text(top_result.get('content', '') or '')
-=======
-        # Get top result
-        top_result = results[0]
-        content = top_result.get('content', '')
->>>>>>> clean-master
         source = top_result.get('source', 'Unknown')
         
         # Extract first 2-3 sentences for concise answer

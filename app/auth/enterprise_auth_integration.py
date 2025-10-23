@@ -6,10 +6,7 @@ Integrates all authentication methods and configurations
 import streamlit as st
 from typing import Optional, Dict, Any
 from datetime import datetime
-<<<<<<< HEAD
 import re
-=======
->>>>>>> clean-master
 
 class EnterpriseAuthIntegration:
     """Main enterprise authentication integration class"""
@@ -24,11 +21,7 @@ class EnterpriseAuthIntegration:
             from app.auth.config_manager import security_config_manager
             self.config = security_config_manager.load_config()
         except Exception as e:
-<<<<<<< HEAD
             st.error(f"Failed to load security configuration: {self._safe_err(e)}")
-=======
-            st.error(f"Failed to load security configuration: {str(e)}")
->>>>>>> clean-master
             self.config = {}
     
     def authenticate_user(self, username: str, password: str, auth_method: str = "auto") -> Optional[Dict[str, Any]]:
@@ -49,11 +42,7 @@ class EnterpriseAuthIntegration:
                 return None
                 
         except Exception as e:
-<<<<<<< HEAD
             st.error(f"❌ Authentication error: {self._safe_err(e)}")
-=======
-            st.error(f"❌ Authentication error: {str(e)}")
->>>>>>> clean-master
             return None
     
     def _detect_auth_method(self, username: str) -> str:
@@ -92,11 +81,7 @@ class EnterpriseAuthIntegration:
             return None
             
         except Exception as e:
-<<<<<<< HEAD
             st.error(f"Local authentication error: {self._safe_err(e)}")
-=======
-            st.error(f"Local authentication error: {str(e)}")
->>>>>>> clean-master
             return None
     
     def _authenticate_ad(self, username: str, password: str) -> Optional[Dict[str, Any]]:
@@ -116,11 +101,7 @@ class EnterpriseAuthIntegration:
             return None
             
         except Exception as e:
-<<<<<<< HEAD
             st.error(f"AD authentication error: {self._safe_err(e)}")
-=======
-            st.error(f"AD authentication error: {str(e)}")
->>>>>>> clean-master
             return None
     
     def _authenticate_okta(self, username: str, password: str) -> Optional[Dict[str, Any]]:
@@ -166,11 +147,7 @@ class EnterpriseAuthIntegration:
             return True
             
         except Exception as e:
-<<<<<<< HEAD
             st.error(f"MFA initiation error: {self._safe_err(e)}")
-=======
-            st.error(f"MFA initiation error: {str(e)}")
->>>>>>> clean-master
             return False
     
     def verify_mfa(self, code: str, method: str, username: str) -> bool:
@@ -193,11 +170,7 @@ class EnterpriseAuthIntegration:
             return False
             
         except Exception as e:
-<<<<<<< HEAD
             st.error(f"MFA verification error: {self._safe_err(e)}")
-=======
-            st.error(f"MFA verification error: {str(e)}")
->>>>>>> clean-master
             return False
     
     def _get_user_totp_secret(self, username: str) -> str:
@@ -224,11 +197,7 @@ class EnterpriseAuthIntegration:
             return True
             
         except Exception as e:
-<<<<<<< HEAD
             st.error(f"Authentication completion error: {self._safe_err(e)}")
-=======
-            st.error(f"Authentication completion error: {str(e)}")
->>>>>>> clean-master
             return False
     
     def _log_auth_event(self, event_type: str, username: str, method: str):
@@ -263,7 +232,6 @@ class EnterpriseAuthIntegration:
         # In production, extract from request headers
         return "Streamlit Browser"
     
-<<<<<<< HEAD
     def _safe_err(self, e: object) -> str:
         """Return an ASCII-safe, control-char stripped error message for Windows consoles."""
         try:
@@ -277,9 +245,6 @@ class EnterpriseAuthIntegration:
             return msg.encode('ascii', 'ignore').decode('ascii')
         except Exception:
             return "error"
-    
-=======
->>>>>>> clean-master
     def logout_user(self):
         """Logout current user and clear session"""
         try:
@@ -297,29 +262,15 @@ class EnterpriseAuthIntegration:
             for key in auth_keys:
                 if key in st.session_state:
                     del st.session_state[key]
-<<<<<<< HEAD
-=======
-            
->>>>>>> clean-master
             st.success("✅ Successfully logged out")
             st.rerun()
             
         except Exception as e:
-<<<<<<< HEAD
             st.error(f"Logout error: {self._safe_err(e)}")
     
 # Global instance and accessor
-=======
-            st.error(f"Logout error: {str(e)}")
-
-# Global instance
->>>>>>> clean-master
 enterprise_auth = EnterpriseAuthIntegration()
 
 def get_enterprise_auth() -> EnterpriseAuthIntegration:
     """Get enterprise authentication instance"""
     return enterprise_auth
-<<<<<<< HEAD
-
-=======
->>>>>>> clean-master

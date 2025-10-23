@@ -8,10 +8,7 @@ import streamlit as st
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
-<<<<<<< HEAD
 import pandas as pd
-=======
->>>>>>> clean-master
 
 # Import authentication components
 from app.auth.auth_ui import AuthUI
@@ -42,13 +39,8 @@ except Exception:
     pass
 
 if not os.getenv("OPENAI_API_KEY"):
-<<<<<<< HEAD
     # Do not stop the app; some providers (Ollama, others) may still be usable
     st.warning("OPENAI_API_KEY not found. OpenAI models may be unavailable. Configure .env to enable them.")
-=======
-    st.error("OPENAI_API_KEY not found in .env file. Please set it and restart the app.")
-    st.stop()
->>>>>>> clean-master
 
 # Import simple vector manager (direct implementation)
 from utils.simple_vector_manager import get_simple_indexes, get_simple_vector_status
@@ -60,7 +52,6 @@ def get_unified_indexes(force_refresh=False):
 def get_vector_db_status():
     return get_simple_vector_status()
 
-<<<<<<< HEAD
 # Global sidebar configuration panel
 def render_global_sidebar(available_indexes: list):
     """Render the left sidebar with global configuration and status.
@@ -226,9 +217,14 @@ def render_global_sidebar(available_indexes: list):
     except Exception:
         pass
 
-=======
->>>>>>> clean-master
-# Import tab modules
+# Import tab modules with reload so fixes are picked up during reruns
+import importlib
+import tabs as _tabs_mod
+try:
+    _tabs_mod = importlib.reload(_tabs_mod)
+except Exception:
+    # If reload fails, continue with existing module
+    pass
 from tabs import (
     render_document_ingestion,
     render_query_assistant,
@@ -265,13 +261,9 @@ try:
 except Exception:
     pass
 
-<<<<<<< HEAD
-=======
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
->>>>>>> clean-master
 # Page configuration
 st.set_page_config(
     page_title="VaultMind GenAI Knowledge Assistant",
@@ -280,13 +272,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-<<<<<<< HEAD
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-=======
->>>>>>> clean-master
+# Logging configured above
 # Custom CSS for better styling
 st.markdown("""
 <style>
@@ -387,7 +373,6 @@ available_indexes = get_unified_indexes(force_refresh=force_refresh)
 # Define INDEX_ROOT for compatibility with legacy functions
 INDEX_ROOT = PROJECT_ROOT / "data" / "indexes"
 
-<<<<<<< HEAD
 # Render global sidebar (left panel) with configuration/status
 try:
     render_global_sidebar(available_indexes)
@@ -395,8 +380,6 @@ except Exception:
     # Fail gracefully; tabs will still render
     pass
 
-=======
->>>>>>> clean-master
 # Tab configuration based on user role
 # Allow exposing Weaviate Settings to all via env flag
 WV_SETTINGS_FOR_ALL = os.getenv("WEAVIATE_SETTINGS_FOR_ALL", "false").lower() in ("1", "true", "yes")
@@ -490,7 +473,6 @@ if available_tabs:
                     render_multi_content_enhanced(user, permissions, auth_middleware, available_indexes or [])
                 except Exception as e2:
                     st.error(f"Both enhanced and fallback failed: {str(e2)}")
-<<<<<<< HEAD
                     # Last resort - show basic functionality (avoid duplicate keys)
                     st.header("🌐 Multi-Content Dashboard")
                     st.markdown("**Basic Excel functionality available**")
@@ -513,20 +495,12 @@ if available_tabs:
                         except Exception as _excel_err:
                             st.error(f"Excel preview failed: {_excel_err}")
                 logger.error(f"Failed to render Enhanced Multi-Content tab: {str(e)}")
-=======
-                    # Last resort - show basic functionality
-                    st.header("🌐 Multi-Content Dashboard")
-                    st.markdown("**Basic Excel functionality available**")
-                    from tabs.multi_content_enhanced import render_excel_tab
-                    render_excel_tab()
-                logger.error(f"Failed to render Enhanced Multi-Content tab: {str(e)}")
     if "tool_requests" in tab_dict:
         with tab_dict["tool_requests"]:
             render_tool_requests(user, permissions, auth_middleware)
     if "permissions" in tab_dict:
         with tab_dict["permissions"]:
             render_user_permissions_tab(user_dict, permissions, auth_middleware)
->>>>>>> clean-master
     if "storage_settings" in tab_dict:
         with tab_dict["storage_settings"]:
             render_storage_settings(form_key_prefix="storage_settings_top")

@@ -52,7 +52,6 @@ def get_simple_vector_status():
         return ("Error", "No Indexes Found")
 
 def get_simple_index_path(index_name):
-<<<<<<< HEAD
     """Get path for a specific index.
     Preference order:
     1) data/indexes/<name> if it contains extracted_text.txt (best for text/real-time retrieval)
@@ -84,20 +83,6 @@ def get_simple_index_path(index_name):
         return str(indexes_path)
 
     # default faiss
-=======
-    """Get path for a specific index"""
-    # Check in faiss_index directory
-    faiss_path = Path("data/faiss_index") / index_name
-    if faiss_path.exists():
-        return str(faiss_path)
-    
-    # Check in indexes directory
-    indexes_path = Path("data/indexes") / index_name
-    if indexes_path.exists():
-        return str(indexes_path)
-    
-    # Check for default_faiss
->>>>>>> clean-master
     if index_name == "default_faiss":
         faiss_dir = Path("data/faiss_index")
         if (faiss_dir / "index.faiss").exists():

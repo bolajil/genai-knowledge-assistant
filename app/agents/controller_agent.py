@@ -215,7 +215,6 @@ Please provide a detailed, accurate response based solely on the document conten
             except Exception as e:
                 print(f"Enterprise retrieval failed, falling back to real-time: {e}")
             
-<<<<<<< HEAD
             # New: Try standard retriever (FAISS or text) before real-time disk read
             try:
                 retriever = get_valid_retriever(index_name)
@@ -253,9 +252,6 @@ Please provide a detailed, accurate response based solely on the document conten
                 except Exception as _qa_err:
                     # If retriever path fails, continue to real-time fallback below
                     pass
-
-=======
->>>>>>> clean-master
             # Fallback to real-time retrieval
             from utils.real_time_retrieval import get_real_time_retriever, verify_fresh_content
             
@@ -288,6 +284,15 @@ Please provide a detailed, accurate response based solely on the document conten
             
             # Get LLM response with fresh context
             llm = get_chat_chain(context, retriever=None)
+            # Build enhanced prompt for real-time retrieval path
+            enhanced_prompt = f"""Based on the following document content, provide a comprehensive answer to the user's question.
+
+User Question: {user_prompt}
+
+Document Content:
+{context_text}
+
+Please provide a detailed, accurate response based solely on the document content above. Include specific references to pages and sections where relevant."""
             response = llm.invoke(enhanced_prompt)
             
             # Format source documents for compatibility
