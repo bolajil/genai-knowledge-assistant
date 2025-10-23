@@ -910,13 +910,16 @@ def render_query_assistant(user=None, permissions=None, auth_middleware=None, av
                             # Generate enterprise-style summary using an enhanced LLM call
                             st.markdown("## 🧠 AI Answer")
                             
-                            # Debug: Check LLM availability (os already imported at top)
+                            # Debug: Check LLM availability across supported providers (BYO keys)
                             openai_key = os.getenv("OPENAI_API_KEY")
                             anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-                            
-                            if not openai_key and not anthropic_key:
+                            mistral_key = os.getenv("MISTRAL_API_KEY")
+                            deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+                            groq_key = os.getenv("GROQ_API_KEY")
+                            ollama_url = os.getenv("OLLAMA_BASE_URL")
+                            if not any([openai_key, anthropic_key, mistral_key, deepseek_key, groq_key, ollama_url]):
                                 st.error("⚠️ **LLM API Key Not Configured!**")
-                                st.warning("Please add OPENAI_API_KEY or ANTHROPIC_API_KEY to your .env file to get AI-generated answers.")
+                                st.warning("Provide at least one provider key (OpenAI, Anthropic, Mistral, DeepSeek, Groq) or set Ollama base URL in the sidebar.")
                                 st.info("Currently showing raw retrieval results as fallback.")
                             
                             try:
@@ -931,22 +934,28 @@ def render_query_assistant(user=None, permissions=None, auth_middleware=None, av
                                 
                                 # Show processing indicator
                                 with st.spinner("🤖 Generating AI answer with LLM..."):
-                                    # Process with LLM
+                                    # Process with LLM, pass selected model when available
+                                    selected_model_name = st.session_state.get("global_model")
                                     summary = llm_processor.process_retrieval_results(
                                         query=q_query,
                                         retrieval_results=results_quick,
-                                        index_name=kb_name
+                                        index_name=kb_name,
+                                        model_name=selected_model_name
                                     )
                                 
                                 summary_text = summary.get("result", "")
                                 processing_method = summary.get("processing_method", "unknown")
                                 
-                                # Show LLM model info
+                                # Show LLM model info (prefer session-selected model)
                                 try:
-                                    from utils.llm_config import get_default_llm_model
-                                    current_model = get_default_llm_model()
+                                    session_model = st.session_state.get("global_model")
+                                    if session_model:
+                                        current_model = session_model
+                                    else:
+                                        from utils.llm_config import get_default_llm_model
+                                        current_model = get_default_llm_model()
                                     st.caption(f"🤖 **Model**: {current_model} | **Method**: {processing_method}")
-                                except:
+                                except Exception:
                                     st.caption(f"**Processing Method**: {processing_method}")
                                 
                                 # Debug info
