@@ -65,6 +65,189 @@ def render_global_sidebar(available_indexes: list):
     st.sidebar.header("Configuration")
     st.sidebar.caption("Customize your AI assistant settings")
 
+    # Session-only overrides: user API key and Vector DB
+    try:
+        if "user_api_key" not in st.session_state:
+            st.session_state["user_api_key"] = ""
+        if "use_custom_weaviate" not in st.session_state:
+            st.session_state["use_custom_weaviate"] = False
+    except Exception:
+        pass
+
+    with st.sidebar.expander("Bring Your Own Keys (Session)", expanded=False):
+        # OpenAI API Key (session-only)
+        user_api_key = st.text_input(
+            "OpenAI API Key",
+            type="password",
+            value=st.session_state.get("user_api_key", ""),
+            help="Used only for this session; not stored.",
+            key="sidebar_user_openai_key",
+        )
+        if user_api_key and user_api_key != st.session_state.get("user_api_key", ""):
+            st.session_state["user_api_key"] = user_api_key
+            os.environ["OPENAI_API_KEY"] = user_api_key
+            st.success("OpenAI key applied for this session.")
+
+        # Additional provider keys (session-only)
+        key_changes = False
+        anth_key = st.text_input(
+            "Anthropic API Key",
+            type="password",
+            value=st.session_state.get("user_anthropic_api_key", os.getenv("ANTHROPIC_API_KEY", "")),
+            key="sidebar_anthropic_key",
+            help="Used only for this session; not stored.",
+        )
+        if anth_key != st.session_state.get("user_anthropic_api_key", ""):
+            st.session_state["user_anthropic_api_key"] = anth_key
+            if anth_key:
+                os.environ["ANTHROPIC_API_KEY"] = anth_key
+            key_changes = True
+
+        mistral_key = st.text_input(
+            "Mistral API Key",
+            type="password",
+            value=st.session_state.get("user_mistral_api_key", os.getenv("MISTRAL_API_KEY", "")),
+            key="sidebar_mistral_key",
+            help="Used only for this session; not stored.",
+        )
+        if mistral_key != st.session_state.get("user_mistral_api_key", ""):
+            st.session_state["user_mistral_api_key"] = mistral_key
+            if mistral_key:
+                os.environ["MISTRAL_API_KEY"] = mistral_key
+            key_changes = True
+
+        deepseek_key = st.text_input(
+            "DeepSeek API Key",
+            type="password",
+            value=st.session_state.get("user_deepseek_api_key", os.getenv("DEEPSEEK_API_KEY", "")),
+            key="sidebar_deepseek_key",
+            help="Used only for this session; not stored.",
+        )
+        if deepseek_key != st.session_state.get("user_deepseek_api_key", ""):
+            st.session_state["user_deepseek_api_key"] = deepseek_key
+            if deepseek_key:
+                os.environ["DEEPSEEK_API_KEY"] = deepseek_key
+            key_changes = True
+
+        groq_key = st.text_input(
+            "Groq API Key",
+            type="password",
+            value=st.session_state.get("user_groq_api_key", os.getenv("GROQ_API_KEY", "")),
+            key="sidebar_groq_key",
+            help="Used only for this session; not stored.",
+        )
+        if groq_key != st.session_state.get("user_groq_api_key", ""):
+            st.session_state["user_groq_api_key"] = groq_key
+            if groq_key:
+                os.environ["GROQ_API_KEY"] = groq_key
+            key_changes = True
+
+        ollama_url = st.text_input(
+            "Ollama Base URL",
+            value=st.session_state.get("user_ollama_url", os.getenv("OLLAMA_BASE_URL", "")),
+            key="sidebar_ollama_url",
+            help="Optional. Example: http://localhost:11434",
+        )
+        if ollama_url != st.session_state.get("user_ollama_url", ""):
+            st.session_state["user_ollama_url"] = ollama_url
+            if ollama_url:
+                os.environ["OLLAMA_BASE_URL"] = ollama_url
+            key_changes = True
+
+        # Reload LLM model config if any key changed
+        if key_changes:
+            try:
+                import importlib, utils.llm_config as _llmc
+                importlib.reload(_llmc)
+                st.info("LLM providers updated for this session.")
+            except Exception:
+                pass
+
+        st.divider()
+        # Optional Vector DB (Weaviate) override (session-only)
+        st.session_state["use_custom_weaviate"] = st.checkbox(
+            "Use my Weaviate (session-only)",
+            value=st.session_state.get("use_custom_weaviate", False),
+            help="Override the default vector DB just for this session.",
+            key="sidebar_use_custom_weaviate",
+        )
+        if st.session_state.get("use_custom_weaviate"):
+            w_url = st.text_input(
+                "Weaviate URL",
+                value=st.session_state.get("user_weaviate_url", os.getenv("WEAVIATE_URL", "")),
+                help="Example: https://<slug>.c0.<region>.<provider>.weaviate.cloud",
+                key="sidebar_weaviate_url",
+            )
+            w_api = st.text_input(
+                "Weaviate API Key",
+                type="password",
+                value=st.session_state.get("user_weaviate_api", ""),
+                help="Leave blank if not required.",
+                key="sidebar_weaviate_api",
+            )
+            w_prefix = st.text_input(
+                "Path Prefix (optional)",
+                value=st.session_state.get("user_weaviate_prefix", os.getenv("WEAVIATE_PATH_PREFIX", "")),
+                help="E.g., /weaviate or /api",
+                key="sidebar_weaviate_prefix",
+            )
+            w_tenant = st.text_input(
+                "Tenant (optional)",
+                value=st.session_state.get("user_weaviate_tenant", os.getenv("WEAVIATE_TENANT", "")),
+                help="Multi-tenant header value.",
+                key="sidebar_weaviate_tenant",
+            )
+            if st.button("Apply Vector DB", use_container_width=True, key="apply_custom_weaviate"):
+                st.session_state["user_weaviate_url"] = w_url
+                st.session_state["user_weaviate_api"] = w_api
+                st.session_state["user_weaviate_prefix"] = w_prefix
+                st.session_state["user_weaviate_tenant"] = w_tenant
+                if w_url:
+                    os.environ["WEAVIATE_URL"] = w_url
+                if w_api is not None:
+                    os.environ["WEAVIATE_API_KEY"] = w_api
+                os.environ["WEAVIATE_PATH_PREFIX"] = w_prefix or ""
+                os.environ["WEAVIATE_TENANT"] = w_tenant or ""
+                # Reset managers so new env is used
+                try:
+                    from utils.multi_vector_storage_manager import close_global_manager as _close_gm
+                    _close_gm()
+                except Exception:
+                    pass
+                try:
+                    from utils.weaviate_manager import get_weaviate_manager as _get_wm
+                    _ = _get_wm()
+                except Exception:
+                    pass
+                st.success("Vector DB settings applied for this session.")
+                st.rerun()
+
+        # Optional Local FAISS override (session-only)
+        with st.expander("Use my local FAISS (session)", expanded=False):
+            faiss_root = st.text_input(
+                "FAISS Index Root",
+                value=st.session_state.get("user_faiss_root", os.getenv("FAISS_INDEX_ROOT", "data/faiss_index")),
+                help="Folder containing FAISS indexes (e.g., index.faiss/index.pkl or subfolders)",
+                key="sidebar_faiss_root",
+            )
+            text_root = st.text_input(
+                "Text Index Root",
+                value=st.session_state.get("user_text_root", os.getenv("TEXT_INDEX_ROOT", "data/indexes")),
+                help="Folder containing extracted_text.txt or text-based indexes",
+                key="sidebar_text_root",
+            )
+            if st.button("Apply Local FAISS Paths", use_container_width=True, key="apply_faiss_roots"):
+                st.session_state["user_faiss_root"] = faiss_root
+                st.session_state["user_text_root"] = text_root
+                if faiss_root:
+                    os.environ["FAISS_INDEX_ROOT"] = faiss_root
+                if text_root:
+                    os.environ["TEXT_INDEX_ROOT"] = text_root
+                # Trigger fresh index discovery
+                st.session_state["force_index_refresh"] = True
+                st.success("Local FAISS paths applied for this session.")
+                st.rerun()
+
     # Build AI model catalog
     try:
         from utils.llm_config import (
