@@ -14,32 +14,45 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def get_simple_indexes():
-    """Get available indexes by directly scanning directories"""
+    """Get available indexes by directly scanning directories.
+    Honors FAISS_INDEX_ROOT and TEXT_INDEX_ROOT env vars when provided.
+    """
     indexes = []
-    
-    # Check data/faiss_index directory
-    faiss_dir = Path("data/faiss_index")
+
+    # Roots (allow user/session override)
+    faiss_root = os.getenv("FAISS_INDEX_ROOT", "data/faiss_index")
+    text_root = os.getenv("TEXT_INDEX_ROOT", "data/indexes")
+
+    # Check FAISS root
+    faiss_dir = Path(faiss_root)
     if faiss_dir.exists():
-        # Check for direct index files
-        if (faiss_dir / "index.faiss").exists() and (faiss_dir / "index.pkl").exists():
-            indexes.append("default_faiss")
-        
-        # Check subdirectories
-        for item in faiss_dir.iterdir():
-            if item.is_dir():
-                indexes.append(item.name)
-    
-    # Check data/indexes directory
-    indexes_dir = Path("data/indexes")
+        try:
+            # Check for direct index files in root
+            if (faiss_dir / "index.faiss").exists() and (faiss_dir / "index.pkl").exists():
+                indexes.append("default_faiss")
+            # Check subdirectories
+            for item in faiss_dir.iterdir():
+                if item.is_dir():
+                    indexes.append(item.name)
+        except Exception:
+            pass
+
+    # Check TEXT root
+    indexes_dir = Path(text_root)
     if indexes_dir.exists():
-        for item in indexes_dir.iterdir():
-            if item.is_dir():
-                indexes.append(item.name)
-    
+        try:
+            for item in indexes_dir.iterdir():
+                if item.is_dir():
+                    indexes.append(item.name)
+        except Exception:
+            pass
+
     # Remove duplicates and sort
     indexes = sorted(list(set(indexes)))
-    
-    logger.info(f"Simple vector manager found indexes: {indexes}")
+
+    logger.info(
+        f"Simple vector manager roots: FAISS_INDEX_ROOT='{faiss_root}', TEXT_INDEX_ROOT='{text_root}'; found indexes: {indexes}"
+    )
     return indexes
 
 def get_simple_vector_status():
@@ -59,8 +72,12 @@ def get_simple_index_path(index_name):
     3) data/indexes/<name> if it exists (even without extracted_text)
     4) default_faiss fallback
     """
+    # Roots (allow user/session override)
+    faiss_root = os.getenv("FAISS_INDEX_ROOT", "data/faiss_index")
+    text_root = os.getenv("TEXT_INDEX_ROOT", "data/indexes")
+
     # Prefer text-friendly directory when available
-    indexes_path = Path("data/indexes") / index_name
+    indexes_path = Path(text_root) / index_name
     if indexes_path.exists():
         try:
             if (indexes_path / "extracted_text.txt").exists():
@@ -74,7 +91,7 @@ def get_simple_index_path(index_name):
             return str(indexes_path)
 
     # Next, faiss vector directory
-    faiss_path = Path("data/faiss_index") / index_name
+    faiss_path = Path(faiss_root) / index_name
     if faiss_path.exists():
         return str(faiss_path)
 
@@ -84,7 +101,7 @@ def get_simple_index_path(index_name):
 
     # default faiss
     if index_name == "default_faiss":
-        faiss_dir = Path("data/faiss_index")
+        faiss_dir = Path(faiss_root)
         if (faiss_dir / "index.faiss").exists():
             return str(faiss_dir)
     
