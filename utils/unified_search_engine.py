@@ -413,7 +413,6 @@ class UnifiedSearchEngine:
             parts.append(f"Content: {snippet}")
             parts.append("---")
         return "\n".join(parts)
-
     def query_with_llm(self, query: str, index_name: str, model_name: str = None, top_k: int = 3) -> Dict[str, Any]:
         """
         Query index and generate LLM response based on retrieved content
@@ -628,7 +627,6 @@ class UnifiedSearchEngine:
         try:
             if not self.openai_client or not search_results:
                 return self._generate_fallback_response(query, search_results)
-
             # Prepare context from search results
             context_parts = []
             for i, result in enumerate(search_results[:3]):  # Use top 3 results
@@ -643,7 +641,6 @@ class UnifiedSearchEngine:
             if not context_parts:
                 return self._generate_fallback_response(query, search_results)
             context = "\n\n".join(context_parts)
-
             # Create prompt
             prompt = f"""Based on the following document excerpts, please answer the user's question. If the information is not available in the documents, please say so clearly.
 
@@ -686,18 +683,43 @@ Please provide a comprehensive answer based on the document content above. Inclu
         except Exception as e:
             logger.error(f"Error generating LLM response: {str(e)}")
             return self._generate_fallback_response(query, search_results)
+    
+    
+    def query_with_llm(self, query: str, index_name: str, model_name: str = "gpt-3.5-turbo", top_k: int = 5) -> Dict[str, Any]:
+        """
+        Complete query pipeline: search index + generate LLM response
+        
+        Args:
+            query: User query
+            index_name: Index to search
+            model_name: LLM model to use
+            top_k: Number of search results to retrieve
+            
+        Returns:
+            Dictionary with search results and generated response
+        """
+        # Search the index
+        search_results = self.search_index(query, index_name, top_k)
+        
+        # Generate LLM response
+        llm_response = self.generate_llm_response(query, search_results, model_name)
+        
+        return {
+            'query': query,
+            'index_name': index_name,
+            'search_results': search_results,
+            'llm_response': llm_response,
+            'model_used': model_name,
+            'results_count': len(search_results)
+        }
 
 # Global instance
 unified_search_engine = UnifiedSearchEngine()
 
 def search_index_unified(query: str, index_name: str, top_k: int = 5) -> List[Dict[str, Any]]:
-    """
-    Unified search function for all tabs
-    """
+    """Unified search function for all tabs"""
     return unified_search_engine.search_index(query, index_name, top_k)
 
 def query_with_llm_unified(query: str, index_name: str, model_name: str = None, top_k: int = 3) -> Dict[str, Any]:
-    """
-    Unified query with LLM function for all tabs
-    """
+    """Unified query with LLM function for all tabs"""
     return unified_search_engine.query_with_llm(query, index_name, model_name, top_k)

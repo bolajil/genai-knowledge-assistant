@@ -400,7 +400,14 @@ def render_global_sidebar(available_indexes: list):
     except Exception:
         pass
 
-# Import tab modules
+# Import tab modules with reload so fixes are picked up during reruns
+import importlib
+import tabs as _tabs_mod
+try:
+    _tabs_mod = importlib.reload(_tabs_mod)
+except Exception:
+    # If reload fails, continue with existing module
+    pass
 from tabs import (
     render_document_ingestion,
     render_query_assistant,
@@ -437,6 +444,9 @@ try:
 except Exception:
     pass
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 # Page configuration
 st.set_page_config(
     page_title="VaultMind GenAI Knowledge Assistant",
@@ -445,10 +455,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
+# Logging configured above
 # Custom CSS for better styling
 st.markdown("""
 <style>
@@ -671,6 +678,12 @@ if available_tabs:
                         except Exception as _excel_err:
                             st.error(f"Excel preview failed: {_excel_err}")
                 logger.error(f"Failed to render Enhanced Multi-Content tab: {str(e)}")
+    if "tool_requests" in tab_dict:
+        with tab_dict["tool_requests"]:
+            render_tool_requests(user, permissions, auth_middleware)
+    if "permissions" in tab_dict:
+        with tab_dict["permissions"]:
+            render_user_permissions_tab(user_dict, permissions, auth_middleware)
     if "storage_settings" in tab_dict:
         with tab_dict["storage_settings"]:
             render_storage_settings(form_key_prefix="storage_settings_top")
