@@ -932,29 +932,45 @@ def render_query_assistant(user=None, permissions=None, auth_middleware=None, av
                                     st.warning("⚠️ LLM not available - check API keys in .env file")
                                     raise ValueError("LLM not available")
                                 
+                                # Determine effective model (must be configured)
+                                selected_model_name = st.session_state.get("global_model")
+                                effective_model = selected_model_name
+                                try:
+                                    from utils.llm_config import validate_llm_setup as _v, get_default_llm_model as _gdef, get_available_llm_models as _gavail
+                                    ok, _msg = _v(selected_model_name) if selected_model_name else (False, "")
+                                    if not ok:
+                                        avail_names = _gavail() or []
+                                        # Filter out sentinel messages
+                                        avail_names = [n for n in avail_names if n and not n.lower().startswith("no llm models available")]
+                                        effective_model = _gdef() if avail_names else None
+                                except Exception:
+                                    pass
+
                                 # Show processing indicator
                                 with st.spinner("🤖 Generating AI answer with LLM..."):
-                                    # Process with LLM, pass selected model when available
-                                    selected_model_name = st.session_state.get("global_model")
+                                    # Process with LLM, pass effective model when available
                                     summary = llm_processor.process_retrieval_results(
                                         query=q_query,
                                         retrieval_results=results_quick,
                                         index_name=kb_name,
-                                        model_name=selected_model_name
+                                        model_name=effective_model
                                     )
                                 
                                 summary_text = summary.get("result", "")
                                 processing_method = summary.get("processing_method", "unknown")
                                 
-                                # Show LLM model info (prefer session-selected model)
+                                # Show LLM model info (prefer effective model; note if selection was adjusted)
                                 try:
                                     session_model = st.session_state.get("global_model")
-                                    if session_model:
-                                        current_model = session_model
-                                    else:
+                                    display_model = effective_model or session_model
+                                    if not display_model:
                                         from utils.llm_config import get_default_llm_model
-                                        current_model = get_default_llm_model()
-                                    st.caption(f"🤖 **Model**: {current_model} | **Method**: {processing_method}")
+                                        display_model = get_default_llm_model()
+                                    # If selection was adjusted, inform user non-intrusively
+                                    if session_model and effective_model and session_model != effective_model:
+                                        st.caption(f"🤖 **Model**: {display_model} (auto-selected) | **Method**: {processing_method}")
+                                    else:
+                                        st.caption(f"🤖 **Model**: {display_model} | **Method**: {processing_method}")
                                 except Exception:
                                     st.caption(f"**Processing Method**: {processing_method}")
                                 
