@@ -184,19 +184,106 @@ def render_global_sidebar(available_indexes: list):
                         proc = _ELP()
                         # Minimal test: one small context chunk
                         test_resp = proc.process_retrieval_results(
-                            query="Short readiness check: summarize the context succinctly.",
-                            retrieval_results=[{"content": "This is a minimal context for an LLM readiness test.", "source": "diagnostics"}],
+                            query="Readiness check: write a concise but complete 3-5 sentence summary of the context. Ensure the answer is at least 120 characters.",
+                            retrieval_results=[{"content": "This is a minimal context for an LLM readiness test verifying that provider SDKs and API keys are working correctly.", "source": "diagnostics"}],
                             index_name="diagnostics",
                             model_name=model_to_test,
                         )
                         method = test_resp.get("processing_method")
                         result = (test_resp.get("result") or "").strip()
-                        if method == "enhanced_llm" and len(result) > 40:
-                            st.success(f"LLM test OK with {model_to_test}.")
+                        used = test_resp.get("model_used") or model_to_test
+                        if method == "enhanced_llm" and len(result) > 100:
+                            st.success(f"LLM test OK with {used}.")
                         else:
-                            st.warning("LLM call did not return a full response; falling back. Check that the provider SDK is installed and the key is valid.")
+                            st.warning("Enhanced pipeline fell back. Running direct connectivity diagnostics...")
+                            # Direct OpenAI diagnostics if key present
+                            import os as _os
+                            if _os.getenv("OPENAI_API_KEY"):
+                                try:
+                                    from openai import OpenAI as _OpenAI
+                                    client = _OpenAI(api_key=_os.getenv("OPENAI_API_KEY"))
+                                    # 1) List models (sanity check)
+                                    try:
+                                        _ = client.models.list()
+                                        st.info("OpenAI: models.list() succeeded")
+                                    except Exception as _ml_err:
+                                        st.error(f"OpenAI models.list() failed: {_ml_err}")
+                                    # 2) Minimal chat call with fallback chain
+                                    messages = [
+                                        {"role": "system", "content": "You are a concise assistant."},
+                                        {"role": "user", "content": "Say 'ready'"},
+                                    ]
+                                    diag_models = ["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4o"]
+                                    ok_any = False
+                                    last_e = None
+                                    for _m in diag_models:
+                                        try:
+                                            r = client.chat.completions.create(model=_m, messages=messages, max_tokens=10)
+                                            txt = (r.choices[0].message.content or "").strip()
+                                            if txt:
+                                                st.success(f"OpenAI chat.completions OK with {_m}: {txt}")
+                                                ok_any = True
+                                                break
+                                        except Exception as _ce:
+                                            last_e = _ce
+                                            continue
+                                    if not ok_any:
+                                        st.error(f"OpenAI chat.completions failed for all diag models. Last error: {last_e}")
+                                except Exception as _dir_err:
+                                    st.error(f"Direct OpenAI diagnostic failed: {_dir_err}")
+                            else:
+                                st.info("No OPENAI_API_KEY detected in environment for direct diagnostics.")
                 except Exception as _e_diag:
                     st.error(f"LLM test failed: {_e_diag}")
+        with cols[1]:
+            if st.button("Show LLM Diagnostics", use_container_width=True, key="btn_llm_diag"):
+                import importlib
+                import os as _os
+                try:
+                    import utils.llm_config as _llmc
+                    _llmc = importlib.reload(_llmc)
+                except Exception as _e:
+                    st.error(f"Failed to reload llm_config: {_e}")
+                    _llmc = None
+                st.write("- **Selected model**:", st.session_state.get("global_model"))
+                if _llmc:
+                    ok, msg = _llmc.validate_llm_setup(st.session_state.get("global_model", ""))
+                    st.write("- **Validation**:", f"{ok} | {msg}")
+                    st.write("- **Detected models**:", _llmc.get_available_llm_models())
+                # Masked keys presence
+                def _mask(val):
+                    if not val:
+                        return "" 
+                    return f"{val[:4]}...{val[-4:]}"
+                st.write("- **Keys**:")
+                st.code({
+                    "OPENAI_API_KEY": bool(_os.getenv("OPENAI_API_KEY")),
+                    "ANTHROPIC_API_KEY": bool(_os.getenv("ANTHROPIC_API_KEY")),
+                    "MISTRAL_API_KEY": bool(_os.getenv("MISTRAL_API_KEY")),
+                    "DEEPSEEK_API_KEY": bool(_os.getenv("DEEPSEEK_API_KEY")),
+                    "GROQ_API_KEY": bool(_os.getenv("GROQ_API_KEY")),
+                    "OLLAMA_BASE_URL": bool(_os.getenv("OLLAMA_BASE_URL")),
+                }, language="json")
+                # Package imports
+                pkgs = {
+                    "openai": "",
+                    "langchain_openai": "",
+                    "anthropic": "",
+                    "langchain_anthropic": "",
+                    "mistralai": "",
+                    "langchain_mistralai": "",
+                    "groq": "",
+                    "langchain_groq": "",
+                }
+                for mod in list(pkgs.keys()):
+                    try:
+                        m = __import__(mod)
+                        ver = getattr(m, "__version__", "(no __version__)")
+                        pkgs[mod] = f"OK {ver}"
+                    except Exception as _imp_err:
+                        pkgs[mod] = f"ERROR: {_imp_err}"
+                st.write("- **Provider packages**:")
+                st.code(pkgs, language="json")
 
         st.divider()
         # Optional Vector DB (Weaviate) override (session-only)
@@ -323,17 +410,28 @@ def render_global_sidebar(available_indexes: list):
             seen.add(name)
             combined.append(name)
 
+    # Toggle to only show configured models (avoid selecting models without keys)
+    show_configured_only = st.sidebar.toggle(
+        "Show configured models only",
+        value=st.session_state.get("show_configured_models_only", False),
+        key="sidebar_models_configured_only",
+        help="If enabled, hides models for providers without keys so validation won't fail."
+    )
+    st.session_state["show_configured_models_only"] = show_configured_only
+    model_choices = (detected if show_configured_only else combined) or ["OpenAI GPT-3.5 Turbo"]
+
     # Choose default model (persist prior selection if any)
     prior = st.session_state.get("global_model")
-    if prior and prior in combined:
+    default_pool = model_choices
+    if prior and prior in default_pool:
         default_model = prior
-    elif not default_model or default_model not in combined:
-        default_model = combined[0] if combined else "OpenAI GPT-4"
+    elif not default_model or default_model not in default_pool:
+        default_model = default_pool[0]
 
     st.session_state["global_model"] = st.sidebar.selectbox(
         "AI Model",
-        combined if combined else ["OpenAI GPT-4"],
-        index=(combined.index(default_model) if default_model in combined else 0),
+        model_choices,
+        index=(model_choices.index(default_model) if default_model in model_choices else 0),
         key="sidebar_ai_model",
     )
 
