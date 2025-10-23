@@ -41,27 +41,49 @@ class WeaviateIngestionHelper:
         """
         base = self.weaviate_manager.url.rstrip('/')
         logger.debug(f"Testing Weaviate connectivity at base: {base}")
-        # Prefer readiness first, then schema
-        endpoints = [
-            f"{base}/v1/.well-known/ready",
-            f"{base}/v1/schema",
-        ]
+
+        # Determine candidate REST path prefixes: env hint, discovered, then root
+        prefix_candidates: List[str] = []
+        try:
+            pref = os.getenv("WEAVIATE_PATH_PREFIX", "").strip()
+            if pref and not pref.startswith('/'):
+                pref = '/' + pref
+            if pref.endswith('/'):
+                pref = pref[:-1]
+            if pref:
+                prefix_candidates.append(pref)
+        except Exception:
+            pass
+        try:
+            discovered = self.weaviate_manager._discover_rest_prefix() or ''
+            if discovered and discovered not in prefix_candidates:
+                prefix_candidates.append(discovered)
+        except Exception:
+            pass
+        prefix_candidates.append('')  # root fallback
+
+        # Prefer readiness first, then schema, for each prefix candidate
         last_err: Optional[Exception] = None
-        for url in endpoints:
-            try:
-                resp = self.weaviate_manager._http_request("GET", url, timeout=30)
-                if resp.status_code == 200:
-                    logger.info(f"Connectivity OK via {url}")
-                    return True
-                elif resp.status_code in (401, 403, 204, 405):
-                    # Auth/method might be required but endpoint exists
-                    logger.info(f"Connectivity OK (auth/method needed) via {url}: {resp.status_code}")
-                    return True
-                else:
-                    logger.debug(f"Connectivity probe to {url} returned {resp.status_code}")
-            except Exception as e:
-                last_err = e
-                logger.debug(f"Connectivity probe failed at {url}: {e}")
+        for pref in prefix_candidates:
+            endpoints = [
+                f"{base}{pref}/v1/.well-known/ready",
+                f"{base}{pref}/v1/schema",
+            ]
+            for url in endpoints:
+                try:
+                    resp = self.weaviate_manager._http_request("GET", url, timeout=30)
+                    if resp.status_code == 200:
+                        logger.info(f"Connectivity OK via {url}")
+                        return True
+                    elif resp.status_code in (401, 403, 204, 405):
+                        # Auth/method might be required but endpoint exists
+                        logger.info(f"Connectivity OK (auth/method needed) via {url}: {resp.status_code}")
+                        return True
+                    else:
+                        logger.debug(f"Connectivity probe to {url} returned {resp.status_code}")
+                except Exception as e:
+                    last_err = e
+                    logger.debug(f"Connectivity probe failed at {url}: {e}")
         logger.error("Weaviate connectivity checks failed via direct '/v1/.well-known/ready' and '/v1/schema'")
         if last_err:
             logger.debug(f"Last connectivity error: {last_err}")
@@ -369,10 +391,32 @@ class WeaviateIngestionHelper:
                            embedding_model: str = "all-MiniLM-L6-v2") -> Dict[str, Any]:
         """Internal method to ingest text content into Weaviate"""
         try:
-            # Create collection if it doesn't exist
-            if collection_name not in self.weaviate_manager.list_collections():
-                if not self.create_collection_for_document(collection_name, document_type, username):
-                    return {"success": False, "error": "Failed to create collection"}
+            # Resolve sanitized class name up front and prefer inserting into it
+            try:
+                actual = self.weaviate_manager._resolve_collection_name(collection_name)
+            except Exception:
+                actual = collection_name
+
+            # Ensure target collection exists, but avoid creation when the cluster blocks it
+            existing = set(self.weaviate_manager.list_collections())
+            if actual not in existing:
+                allow_create = os.getenv("WEAVIATE_CREATE_COLLECTIONS", "false").lower() in ("1", "true", "yes")
+                if allow_create:
+                    if not self.create_collection_for_document(actual, document_type, username):
+                        return {
+                            "success": False,
+                            "error": f"Collection creation failed for '{actual}'. Create it in Console or disable creation.",
+                            "sanitized_collection": actual,
+                        }
+                else:
+                    return {
+                        "success": False,
+                        "error": (
+                            f"Collection '{actual}' does not exist and creation is disabled. "
+                            f"Please create it in Weaviate Console (same exact name) and retry."
+                        ),
+                        "sanitized_collection": actual,
+                    }
             
             # Create chunks
             chunk_start_ts = time.time()
@@ -392,7 +436,10 @@ class WeaviateIngestionHelper:
                 chunk_texts = self._create_basic_chunks(text_content, chunk_size, chunk_overlap)
             chunking_duration_ms = int((time.time() - chunk_start_ts) * 1000)
             
-            logger.debug(f"Prepared {len(chunk_texts)} chunks for collection '{collection_name}' from '{file_name}' using method={'semantic' if use_semantic_chunking else 'basic'}")
+            logger.debug(
+                f"Prepared {len(chunk_texts)} chunks for collection '{collection_name}' (actual='{actual}') "
+                f"from '{file_name}' using method={'semantic' if use_semantic_chunking else 'basic'}"
+            )
             
             # Prepare documents for Weaviate
             documents = []
@@ -435,11 +482,13 @@ class WeaviateIngestionHelper:
                 documents.append(doc)
             
             # Add documents to Weaviate with detailed diagnostics
-            diag = self.weaviate_manager.add_documents_with_stats(collection_name, documents)
+            # Always write into the sanitized class name the SDK/REST expect
+            diag = self.weaviate_manager.add_documents_with_stats(actual, documents)
 
             # Attach additional context and phase timings
             diag = dict(diag) if isinstance(diag, dict) else {"success": bool(diag)}
-            diag.setdefault("collection_name", collection_name)
+            diag.setdefault("collection_name", actual)
+            diag["requested_collection"] = collection_name
             diag.setdefault("document_type", document_type)
             diag.setdefault("file_name", file_name)
             diag["total_chunks"] = len(chunk_texts)
