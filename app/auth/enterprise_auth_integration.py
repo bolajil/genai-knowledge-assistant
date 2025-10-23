@@ -245,7 +245,6 @@ class EnterpriseAuthIntegration:
             return msg.encode('ascii', 'ignore').decode('ascii')
         except Exception:
             return "error"
-    
     def logout_user(self):
         """Logout current user and clear session"""
         try:
@@ -275,4 +274,3 @@ enterprise_auth = EnterpriseAuthIntegration()
 def get_enterprise_auth() -> EnterpriseAuthIntegration:
     """Get enterprise authentication instance"""
     return enterprise_auth
-

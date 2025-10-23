@@ -2918,6 +2918,7 @@ def perform_multi_source_search(query, selected_indexes, include_web, include_ex
     
     return results
 
+ 
 def synthesize_topline_answer(search_results: Dict[str, Any], query: str) -> Optional[str]:
     """Create a concise, query-aligned answer with citations using enterprise utilities.
     Uses existing document results and augments with enterprise search if needed.

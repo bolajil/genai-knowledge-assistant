@@ -182,6 +182,7 @@ class EnhancedChatAssistant:
         # Lazy import to avoid top-level dependency failures
         try:
             from openai import OpenAI
+            # conflict resolved
         except ImportError as ie:
             logger.error(f"OpenAI library not installed: {ie}")
             raise RuntimeError("OpenAI library not installed. Run: pip install openai")

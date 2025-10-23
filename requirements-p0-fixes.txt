@@ -14,9 +14,12 @@ python-magic>=0.4.27; platform_system != "Windows"
 # Environment & Configuration
 python-dotenv>=1.0.0
 
+<<<<<<< HEAD
 # Security & Encryption
 cryptography>=41.0.0
 
+=======
+>>>>>>> clean-master
 # Existing dependencies (if not already installed)
 streamlit>=1.28.0
 sentence-transformers>=2.2.2

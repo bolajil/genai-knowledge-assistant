@@ -4,7 +4,6 @@ Query Assistant Tab
 Search and retrieve information from indexed documents using natural language.
 Access Level: All Users
 """
-
 import streamlit as st
 import logging
 import time
@@ -12,17 +11,27 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict
 from utils.vector_db_provider import get_vector_db_provider
-import faiss
 import os
 import numpy as np
-from sentence_transformers import SentenceTransformer
 import re
 from utils.web_search import run_web_search
+
+# Optional heavy dependencies (guarded to prevent import-time failure)
+try:
+    import faiss  # type: ignore
+    FAISS_AVAILABLE = True
+except Exception:
+    FAISS_AVAILABLE = False
+
+try:
+    from sentence_transformers import SentenceTransformer  # type: ignore
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except Exception:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
 
 # P0 Security Imports
 from utils.security import validate_search_query, validate_collection_name, validate_top_k, check_rate_limit
 from utils.query_cache import get_cached_result, cache_query_result, get_cache_stats
-
 logger = logging.getLogger(__name__)
 
 # Import feedback system components
@@ -79,7 +88,8 @@ def query_documents(query: str, index_name: str, top_k: int = 5, backend: str = 
         results = []
         if backend == "FAISS (Local Index)":
             try:
-                results = search_vector_store(query, index_name, top_k)
+                vdb = get_vector_db_provider()
+                results = vdb.search_index(query=query, index_name=index_name, top_k=top_k)
                 if not results:
                     logger.warning(f"Primary search empty - using fallback for '{index_name}'")
                     results = _get_fallback_results(query, top_k)
@@ -1298,7 +1308,6 @@ if (btn2 && ta2) {{
                                     )
                             except Exception as cache_error:
                                 logger.warning(f"Failed to cache query results: {cache_error}")
-
                             # Store report data in session for the Report tab
                             try:
                                 st.session_state['qa_report_query'] = q_query
@@ -1861,7 +1870,7 @@ if (btn2 && ta2) {{
         # Enterprise hybrid re-ranking option for Index Search
         st.checkbox("Use enterprise hybrid re-ranking (local merge)", value=True, key="qa_index_enterprise")
         search_button = st.button("🔍 Search Knowledge Base", use_container_width=True, key="qa_index_search_btn")
-
+        
         if search_button:
             # P0 Security: Input Validation
             valid_query, error_msg, sanitized_query = validate_search_query(query)
@@ -1878,6 +1887,9 @@ if (btn2 && ta2) {{
                 return
 
             # Validate query length (additional check)
+            if not query or len(query.strip()) < 3:
+                st.warning("Please enter a query with at least 3 characters")
+                return
             if len(query) > 1000:
                 st.warning("Query too long (max 1000 characters)")
                 return
@@ -2416,7 +2428,7 @@ if (btn && ta) {{
                                         render_query_insights(web_query)
                                 except Exception as feedback_error:
                                     logger.warning(f"Failed to render web search feedback buttons: {feedback_error}")
-                                
+                            
                         except Exception as e:
                             st.error(f"❌ Web search failed: {type(e).__name__} — {str(e)[:200]}")
                             logger.error(f"Web search failed for user {username}: {str(e)}")

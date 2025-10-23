@@ -7,7 +7,7 @@ import logging
 import json
 from urllib.parse import urlparse
 from typing import List, Dict, Any, Optional, Tuple, Union
-from datetime import datetime
+from datetime import datetime, timezone
 import time
 import re
 import weaviate
@@ -411,6 +411,106 @@ class WeaviateManager:
         except Exception as e:
             logger.error(f"Failed to load query embedding model: {e}")
             return None
+
+    def _get_class_schema_via_schema(self, class_name: str) -> Optional[Dict[str, Any]]:
+        """Return raw class schema dict.
+        Tries /v1/schema/{class} first; if unavailable, falls back to /v1/schema and selects the class.
+        """
+        try:
+            actual = self._resolve_collection_name(class_name)
+            base = self._get_base()
+            # Try direct class endpoint
+            try:
+                url = f"{base}/v1/schema/{actual}"
+                resp = self._http_request("GET", url, timeout=20)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        return data
+            except Exception as e1:
+                logger.debug(f"Direct /v1/schema/{{class}} failed for '{class_name}': {e1}")
+
+            # Fallback to full schema listing
+            url_all = f"{base}/v1/schema"
+            resp_all = self._http_request("GET", url_all, timeout=20)
+            if resp_all.status_code == 200:
+                data_all = resp_all.json() if resp_all.content else {}
+                if isinstance(data_all, dict):
+                    classes = data_all.get("classes", []) or []
+                    for c in classes:
+                        if not isinstance(c, dict):
+                            continue
+                        cname = c.get("class") or c.get("name")
+                        if cname == actual:
+                            return c
+        except Exception as e:
+            logger.debug(f"_get_class_schema_via_schema failed for '{class_name}': {e}")
+        return None
+
+    def _get_known_properties_for_class(self, class_name: str) -> Optional[set]:
+        """Return a set of property names defined for the class, if obtainable."""
+        try:
+            info = self._get_class_schema_via_schema(class_name)
+            if info and isinstance(info.get("properties"), list):
+                names = set()
+                for p in info.get("properties", []) or []:
+                    if isinstance(p, dict) and p.get("name"):
+                        names.add(str(p["name"]))
+                return names
+        except Exception:
+            pass
+        return None
+
+    def _filter_props_to_known(self, class_name: str, props: Dict[str, Any]) -> Dict[str, Any]:
+        """Filter outgoing properties to those present in the class schema.
+        If schema not available, return props unchanged.
+        """
+        try:
+            known = self._get_known_properties_for_class(class_name)
+            if not known:
+                return props
+            filtered = {k: v for k, v in props.items() if k in known}
+            # If content missing but available as alternative (rare), keep original props
+            return filtered if filtered else props
+        except Exception:
+            return props
+
+    def _class_has_named_vector(self, class_name: str, vector_name: str) -> bool:
+        """Best-effort check for a named vector definition on the class.
+
+        - Returns False for v1-only clusters or when detection fails.
+        - On v2 clusters, queries /v2/collections/{class} and looks for a vector named `vector_name`.
+        """
+        try:
+            # Skip when v2 probing is disabled or API version is v1
+            if os.getenv("WEAVIATE_SKIP_V2", "false").lower() in ("1", "true", "yes"):
+                return False
+            if self.detect_api_version() != "v2":
+                return False
+            base = self._get_base()
+            actual = self._resolve_collection_name(class_name)
+            url = f"{base}/v2/collections/{actual}"
+            resp = self._http_request("GET", url, timeout=15)
+            if resp.status_code != 200:
+                return False
+            data = resp.json() if resp.content else {}
+            # Try a few common shapes
+            # 1) { vectors: [ { name: "content", ... }, ... ] }
+            try:
+                vectors = data.get("vectors")
+                if isinstance(vectors, list):
+                    for v in vectors:
+                        if isinstance(v, dict) and str(v.get("name")) == vector_name:
+                            return True
+                # 2) { vector_config: { content: {...}, ... } }
+                vc = data.get("vector_config") or data.get("namedVectors")
+                if isinstance(vc, dict) and vector_name in vc:
+                    return True
+            except Exception:
+                pass
+            return False
+        except Exception:
+            return False
 
     def _encode_query_text(self, text: str, model_name: Optional[str] = None) -> Optional[List[float]]:
         try:
@@ -869,17 +969,24 @@ class WeaviateManager:
                             # Prepare documents for REST insertion
                             objects_to_insert = []
                             force_named_content = os.getenv("WEAVIATE_USE_CLIENT_VECTORS", "false").lower() in ("1", "true", "yes")
+                            include_meta = os.getenv("WEAVIATE_INCLUDE_METADATA", "false").lower() in ("1", "true", "yes")
                             for doc in documents:
                                 props: Dict[str, Any] = {
                                     "content": doc.get("content", ""),
                                     "source": doc.get("source", "unknown"),
                                     "source_type": doc.get("source_type", "document"),
                                     "created_at": datetime.now().isoformat(),
-                                    "metadata": doc.get("metadata", {}),
                                 }
+                                if include_meta and isinstance(doc.get("metadata"), dict):
+                                    props["metadata"] = doc.get("metadata", {})
                                 for key, value in doc.items():
                                     if key not in ["content", "source", "source_type", "metadata", "vector", "vectors"]:
                                         props[key] = value
+                                # Filter to schema-known properties to avoid validation errors
+                                try:
+                                    props = self._filter_props_to_known(actual, props)
+                                except Exception:
+                                    pass
                                 vec = doc.get("vector")
                                 named_vecs = doc.get("vectors")
                                 if force_named_content and named_vecs is None and vec is not None:
@@ -895,7 +1002,7 @@ class WeaviateManager:
                             max_insert_sec = float(os.getenv("WEAVIATE_INSERT_MAX_SEC", "180"))
                             # Execute REST fallback insertion
                             rest_diag = self._insert_objects_via_rest_v1(
-                                collection_name,
+                                actual,
                                 objects_to_insert,
                                 log_every_n,
                                 batch_chunk_size,
@@ -936,33 +1043,106 @@ class WeaviateManager:
                             result["error"] = msg
                             return result
 
+            # Allow forcing REST v1 batch insertion (diagnostics are clearer on some clusters)
+            force_rest_batch = os.getenv("WEAVIATE_FORCE_REST_BATCH", "false").lower() in ("1", "true", "yes")
+            if force_rest_batch:
+                logger.info("WEAVIATE_FORCE_REST_BATCH=true; using REST v1 batch insertion path")
+                # Build objects for REST path (mirror SDK-prep logic)
+                objects_to_insert = []
+                include_meta_rest = os.getenv("WEAVIATE_INCLUDE_METADATA", "false").lower() in ("1", "true", "yes")
+                for doc in documents:
+                    props: Dict[str, Any] = {
+                        "content": doc.get("content", ""),
+                        "source": doc.get("source", "unknown"),
+                        "source_type": doc.get("source_type", "document"),
+                        "created_at": datetime.now().isoformat(),
+                    }
+                    if include_meta_rest and isinstance(doc.get("metadata"), dict):
+                        props["metadata"] = doc.get("metadata", {})
+                    for key, value in doc.items():
+                        if key not in ["content", "source", "source_type", "metadata", "vector", "vectors"]:
+                            props[key] = value
+                    try:
+                        props = self._filter_props_to_known(actual, props)
+                    except Exception:
+                        pass
+                    vec = doc.get("vector")
+                    named_vecs = doc.get("vectors")
+                    objects_to_insert.append({"properties": props, "vector": vec, "vectors": named_vecs})
+
+                # Read knobs and execute REST insertion
+                log_every_n = int(os.getenv("WEAVIATE_INSERT_LOG_EVERY", "25"))
+                batch_chunk_size = int(os.getenv("WEAVIATE_BATCH_CHUNK_SIZE", "100"))
+                max_insert_sec = float(os.getenv("WEAVIATE_INSERT_MAX_SEC", "180"))
+                rest_diag2 = self._insert_objects_via_rest_v1(actual, objects_to_insert, log_every_n, batch_chunk_size, max_insert_sec)
+
+                # Merge results
+                result.update({
+                    "processed_count": rest_diag2.get("processed_count", 0),
+                    "duration_ms": rest_diag2.get("duration_ms"),
+                    "post_count": rest_diag2.get("post_count"),
+                })
+                if rest_diag2.get("warnings"):
+                    result["warnings"].extend(rest_diag2["warnings"]) 
+                if rest_diag2.get("error"):
+                    result["error"] = rest_diag2["error"]
+                    return result
+                pc = result["pre_count"]
+                qc = result["post_count"]
+                if pc is not None and qc is not None:
+                    try:
+                        result["inserted_delta"] = max(0, int(qc) - int(pc))
+                    except Exception:
+                        result["inserted_delta"] = None
+                result["success"] = True
+                logger.info((
+                    f"[add_documents_with_stats:REST(force)] attempted={len(documents)} to '{collection_name}' in "
+                    f"{result['duration_ms']}ms; counts: before={result['pre_count']}, after={result['post_count']}, inserted_delta={result['inserted_delta']}"
+                ))
+                return result
+
             # Pre count (best-effort)
             try:
                 agg_before = collection.aggregate.over_all(total_count=True)
                 result["pre_count"] = getattr(agg_before, "total_count", None)
             except Exception as e:
                 logger.debug(f"Pre-insert count failed for '{collection_name}': {e}")
+                # GraphQL fallback for pre_count
+                try:
+                    gq_pre = self._get_class_count_via_graphql(collection_name)
+                    if gq_pre is not None:
+                        result["pre_count"] = gq_pre
+                except Exception:
+                    pass
 
             # Prepare documents (separate properties from vectors)
             objects_to_insert = []
-            force_named_content = os.getenv("WEAVIATE_USE_CLIENT_VECTORS", "false").lower() in ("1", "true", "yes")
+            # Only use named vector 'content' when the class actually defines it
+            use_named_content = self._class_has_named_vector(actual, "content")
+            include_meta2 = os.getenv("WEAVIATE_INCLUDE_METADATA", "false").lower() in ("1", "true", "yes")
             for doc in documents:
                 # Build properties
                 props: Dict[str, Any] = {
                     "content": doc.get("content", ""),
                     "source": doc.get("source", "unknown"),
                     "source_type": doc.get("source_type", "document"),
-                    "created_at": datetime.now().isoformat(),
-                    "metadata": doc.get("metadata", {}),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
                 }
+                if include_meta2 and isinstance(doc.get("metadata"), dict):
+                    props["metadata"] = doc.get("metadata", {})
                 for key, value in doc.items():
                     if key not in ["content", "source", "source_type", "metadata", "vector", "vectors"]:
                         props[key] = value
+                # Filter to schema-known properties
+                try:
+                    props = self._filter_props_to_known(actual, props)
+                except Exception:
+                    pass
                 # Extract vectors
                 vec = doc.get("vector")
                 named_vecs = doc.get("vectors")
-                # If forcing client vectors and only default vector provided, map to named 'content'
-                if force_named_content and named_vecs is None and vec is not None:
+                # If class supports named vectors and only default vector provided, map to 'content'
+                if use_named_content and named_vecs is None and vec is not None:
                     try:
                         named_vecs = {"content": vec}
                         vec = None
@@ -983,14 +1163,30 @@ class WeaviateManager:
                 with collection.batch.dynamic() as batch:
                     for item in chunk:
                         props = item.get("properties", {})
-                        vec = item.get("vector")
-                        vecs = item.get("vectors")
-                        try:
-                            # Newer SDKs accept both 'vector' and 'vectors' kwargs
-                            batch.add_object(properties=props, vector=vec, vectors=vecs)
-                        except TypeError:
-                            # Fallback: try only default vector
-                            batch.add_object(properties=props, vector=vec)
+                        vec_default = item.get("vector")
+                        vec_named = item.get("vectors") if isinstance(item.get("vectors"), dict) else None
+                        # Determine correct vector and name for SDK v4
+                        vec_to_send = None
+                        vec_name = None
+                        if use_named_content:
+                            # Prefer named 'content' vector when class supports it
+                            if vec_named and "content" in vec_named:
+                                vec_to_send = vec_named.get("content")
+                                vec_name = "content"
+                            elif vec_default is not None:
+                                vec_to_send = vec_default
+                                vec_name = "content"
+                        else:
+                            # If not forcing named vectors, send default if present; otherwise try named 'content'
+                            if vec_default is not None:
+                                vec_to_send = vec_default
+                            elif vec_named and "content" in vec_named:
+                                vec_to_send = vec_named.get("content")
+                        # Add object; pass vector_name when using named vector
+                        if vec_name:
+                            batch.add_object(properties=props, vector=vec_to_send, vector_name=vec_name)
+                        else:
+                            batch.add_object(properties=props, vector=vec_to_send)
                         processed += 1
                         if log_every_n > 0 and (processed % log_every_n == 0 or processed == len(objects_to_insert)):
                             elapsed_ms = int((time.time() - insert_start_ts) * 1000)
@@ -1018,6 +1214,13 @@ class WeaviateManager:
                 result["post_count"] = getattr(agg_after, "total_count", None)
             except Exception as e:
                 logger.debug(f"Post-insert count failed for '{collection_name}': {e}")
+                # GraphQL fallback for post_count
+                try:
+                    gq_post = self._get_class_count_via_graphql(collection_name)
+                    if gq_post is not None:
+                        result["post_count"] = gq_post
+                except Exception:
+                    pass
 
             # Compute delta
             pc = result["pre_count"]
@@ -1105,13 +1308,46 @@ class WeaviateManager:
                     logger.error(error)
                     break
                 # Check per-object errors if provided
+                # Parse per-object results to refine processed count and capture errors
                 try:
                     data = resp.json()
+                    # Typical shape: { "results": { "objects": [ {"status": "SUCCESS"|"FAILED", ...}, ... ] }, "errors": {...}? }
+                    results_obj = None
+                    if isinstance(data, dict):
+                        results_obj = (
+                            data.get("results") or data.get("result") or {}
+                        )
+                    objs = []
+                    if isinstance(results_obj, dict):
+                        objs = results_obj.get("objects") or results_obj.get("object") or []
+                    if isinstance(objs, list) and objs:
+                        ok = 0
+                        err_msgs: List[str] = []
+                        for ro in objs:
+                            status = (ro.get("status") or ro.get("result")) if isinstance(ro, dict) else None
+                            s = str(status).upper() if status is not None else ""
+                            if any(tok in s for tok in ("SUCCESS", "OK")):
+                                ok += 1
+                            else:
+                                # Collect an error snippet if available
+                                em = None
+                                try:
+                                    em = ro.get("result", {}).get("errors") or ro.get("errors")
+                                except Exception:
+                                    em = None
+                                if em:
+                                    err_msgs.append(str(em)[:300])
+                        processed += ok
+                        if err_msgs:
+                            warnings.append(f"REST batch had {len(objs)-ok} errors: {err_msgs[:3]}")
+                    else:
+                        # Fallback: count the whole chunk
+                        processed += len(chunk)
+                    # Top-level errors block
                     if isinstance(data, dict) and data.get("errors"):
-                        warnings.append(f"REST batch reported errors: {str(data.get('errors'))[:500]}")
+                        warnings.append(f"REST batch reported top-level errors: {str(data.get('errors'))[:500]}")
                 except Exception:
-                    pass
-                processed += len(chunk)
+                    processed += len(chunk)
                 if log_every_n > 0 and (processed % log_every_n == 0 or processed == len(objects)):
                     elapsed_ms = int((time.time() - start_ts) * 1000)
                     logger.info(f"[REST] Insertion progress: {processed}/{len(objects)} into '{class_name}' ({elapsed_ms}ms)")
@@ -1652,28 +1888,37 @@ class WeaviateManager:
 
     def _list_collections_via_schema(self) -> List[str]:
         """Fallback: list collections by querying schema endpoints.
-        Bypasses path discovery and uses the stable WCS endpoint at '/v1/schema'.
+        Tries discovered/explicit REST prefix first, then falls back to root '/v1/schema'.
         """
         base = self._get_base()
-        url = f"{base}/v1/schema"
+        # Build candidate URLs: base+prefix, then base
+        urls: List[str] = []
+        try:
+            prefix = self._discover_rest_prefix() or ''
+        except Exception:
+            prefix = ''
+        if prefix:
+            urls.append(f"{base}{prefix}/v1/schema")
+        urls.append(f"{base}/v1/schema")
         last_err: Optional[Exception] = None
-        for attempt in range(2):  # simple retry for transient issues
-            try:
-                resp = self._http_request("GET", url, timeout=30)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    classes = data.get("classes", []) or []
-                    names = [c.get("class") or c.get("name") for c in classes if isinstance(c, dict)]
-                    logger.info(f"Listed collections via direct schema endpoint at {url}")
-                    return [n for n in names if n]
-                else:
-                    logger.error(f"Direct schema query failed: {resp.status_code} at {url}")
-                    return []
-            except Exception as e:
-                last_err = e
-                logger.warning(f"Direct schema attempt {attempt+1} failed at {url}: {e}")
+        for url in urls:
+            for attempt in range(2):  # simple retry per URL for transient issues
+                try:
+                    resp = self._http_request("GET", url, timeout=30)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        classes = data.get("classes", []) or []
+                        names = [c.get("class") or c.get("name") for c in classes if isinstance(c, dict)]
+                        logger.info(f"Listed collections via schema endpoint at {url}")
+                        return [n for n in names if n]
+                    else:
+                        logger.error(f"Schema query failed: {resp.status_code} at {url}")
+                        break
+                except Exception as e:
+                    last_err = e
+                    logger.warning(f"Schema attempt {attempt+1} failed at {url}: {e}")
         if last_err:
-            logger.error(f"All direct schema attempts failed at {url}: {last_err}")
+            logger.error(f"All schema attempts failed; last error: {last_err}")
         return []
     
     def _get_primary_text_property(self, class_name: str) -> Optional[str]:
@@ -1691,11 +1936,22 @@ class WeaviateManager:
                 logger.info(f"Using WEAVIATE_PRIMARY_TEXT_PROP override: {override}")
                 return override
             base = self._get_base()
-            url = f"{base}/v1/schema"
-            resp = self._http_request("GET", url, timeout=20)
-            if resp.status_code != 200:
+            urls: List[str] = []
+            try:
+                prefix = self._discover_rest_prefix() or ''
+            except Exception:
+                prefix = ''
+            if prefix:
+                urls.append(f"{base}{prefix}/v1/schema")
+            urls.append(f"{base}/v1/schema")
+            data = {}
+            for url in urls:
+                resp = self._http_request("GET", url, timeout=20)
+                if resp.status_code == 200:
+                    data = resp.json() if resp.content else {}
+                    break
+            if not isinstance(data, dict) or not data:
                 return None
-            data = resp.json() if resp.content else {}
             classes = data.get("classes", []) or []
             for c in classes:
                 cname = c.get("class") or c.get("name")
@@ -1851,22 +2107,24 @@ class WeaviateManager:
                 pre_count = getattr(agg_before, "total_count", None)
             except Exception as e:
                 logger.debug(f"Pre-insert count failed for '{collection_name}': {e}")
-
-            # Prepare documents for insertion
-            objects_to_insert = []
+            # Prepare objects to insert
+            include_meta = os.getenv("WEAVIATE_INCLUDE_METADATA", "false").lower() in ("1", "true", "yes")
+            objects_to_insert: List[Dict[str, Any]] = []
             for doc in documents:
-                obj = {
-                    "content": doc.get("content", ""),
-                    "source": doc.get("source", "unknown"),
-                    "source_type": doc.get("source_type", "document"),
-                    "created_at": datetime.now().isoformat(),
-                    "metadata": doc.get("metadata", {})
-                }
-                # Add any additional properties
-                for key, value in doc.items():
-                    if key not in ["content", "source", "source_type", "metadata"]:
-                        obj[key] = value
-                objects_to_insert.append(obj)
+                try:
+                    obj: Dict[str, Any] = {
+                        "content": doc.get("content", ""),
+                        "source": doc.get("source", "unknown"),
+                        "source_type": doc.get("source_type", "document"),
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    if include_meta and isinstance(doc.get("metadata"), dict):
+                        obj["metadata"] = doc["metadata"]
+                    # Filter to known schema properties (best-effort)
+                    obj = self._filter_props_to_known(actual, obj)
+                    objects_to_insert.append(obj)
+                except Exception as be:
+                    logger.warning(f"Skipping document due to build error: {be}")
 
             # Batch insert
             start_ts = time.time()
@@ -1875,14 +2133,27 @@ class WeaviateManager:
                     batch.add_object(properties=obj)
             duration_ms = int((time.time() - start_ts) * 1000)
 
-            # Measure post-insert object count (best-effort). Allow a brief delay for consistency.
+            # Measure post-insert object count (best-effort) with small retries; allow brief delay for consistency.
             post_count = None
-            try:
-                time.sleep(0.3)
-                agg_after = collection.aggregate.over_all(total_count=True)
-                post_count = getattr(agg_after, "total_count", None)
-            except Exception as e:
-                logger.debug(f"Post-insert count failed for '{collection_name}': {e}")
+            attempts = int(os.getenv("WEAVIATE_COUNT_RETRIES", "3"))
+            delay = float(os.getenv("WEAVIATE_COUNT_RETRY_DELAY", "0.5"))
+            for _try in range(max(1, attempts)):
+                if _try > 0:
+                    time.sleep(delay)
+                try:
+                    agg_after = collection.aggregate.over_all(total_count=True)
+                    post_count = getattr(agg_after, "total_count", None)
+                except Exception as e:
+                    logger.debug(f"Post-insert count attempt via SDK failed for '{collection_name}': {e}")
+                if post_count is None:
+                    try:
+                        gq_post = self._get_class_count_via_graphql(collection_name)
+                        if gq_post is not None:
+                            post_count = gq_post
+                    except Exception:
+                        pass
+                if post_count is not None:
+                    break
 
             inserted = None
             if pre_count is not None and post_count is not None:
