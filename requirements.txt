@@ -8,13 +8,10 @@ langchain-community
 langchain-experimental
 faiss-cpu
 pandas
-<<<<<<< HEAD
 plotly>=5.17.0
 sentence-transformers
 weaviate-client[grpc]>=4.4.0,<5
-=======
 sentence-transformers
->>>>>>> clean-master
 pypdf
 duckduckgo-search
 googlesearch-python
@@ -25,7 +22,7 @@ beautifulsoup4
 streamlit-authenticator==0.2.3
 bcrypt==4.0.1
 pyotp==2.9.0
-qrcode==7.4.2.1
+qrcode==7.4.2
 PyJWT==2.8.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
