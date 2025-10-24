@@ -38,6 +38,34 @@ try:
 except Exception:
     pass
 
+# Load sensitive settings from Streamlit secrets into environment (if provided)
+# This ensures components like utils/weaviate_manager.py pick up cloud credentials
+# instead of defaulting to localhost.
+try:
+    # st is already imported above
+    if hasattr(st, "secrets"):
+        _sec = st.secrets
+        # Keys we care about for Weaviate and LLMs
+        for _k in (
+            "WEAVIATE_URL",
+            "WEAVIATE_API_KEY",
+            "WEAVIATE_PATH_PREFIX",
+            "WEAVIATE_FORCE_API_VERSION",
+            "WEAVIATE_SKIP_V2",
+            "OPENAI_API_KEY",
+            "OPENAI_ORG",
+            "OPENAI_ORGANIZATION",
+        ):
+            try:
+                if _k in _sec and str(_sec[_k]).strip():
+                    os.environ[_k] = str(_sec[_k])
+            except Exception:
+                # Do not block app startup if a secret key is missing/malformed
+                pass
+except Exception:
+    # Secrets may not be available in local runs; that's fine
+    pass
+
 if not os.getenv("OPENAI_API_KEY"):
     # Do not stop the app; some providers (Ollama, others) may still be usable
     st.warning("OPENAI_API_KEY not found. OpenAI models may be unavailable. Configure .env to enable them.")

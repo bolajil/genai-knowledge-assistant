@@ -357,7 +357,8 @@ class SemanticChunkingStrategy:
         return chunks
 
 def create_semantic_chunks(content: str, document_name: str, 
-                          chunk_size: int = 512, chunk_overlap: int = 100) -> List[Dict[str, Any]]:
+                          chunk_size: int = 512, chunk_overlap: int = 100,
+                          use_embeddings: bool = True) -> List[Dict[str, Any]]:
     """
     Convenience function to create semantic chunks
     
@@ -374,7 +375,7 @@ def create_semantic_chunks(content: str, document_name: str,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         split_by_headers=True,
-        use_embeddings=True
+        use_embeddings=use_embeddings
     )
     
     return chunker.chunk_document(content, document_name)

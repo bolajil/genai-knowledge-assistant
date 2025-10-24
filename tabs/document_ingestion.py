@@ -104,6 +104,29 @@ def render_document_ingestion(user, permissions, auth_middleware, available_inde
                     except Exception:
                         api_ver = "unknown"
                     st.success(f"🔗 Weaviate connection OK (API {api_ver}) → {weaviate_helper_preview.weaviate_manager.url}")
+                    # Advanced Weaviate ingestion options
+                    st.caption("Ingest without OpenAI by computing vectors locally and optionally creating the collection if missing.")
+                    use_local_embeddings = st.checkbox(
+                        "Use local embeddings (no OpenAI)", value=True, help="Compute vectors with SentenceTransformer and send them with objects."
+                    )
+                    embedding_model = st.selectbox(
+                        "Local embedding model",
+                        ["all-MiniLM-L6-v2", "all-MiniLM-L12-v2", "paraphrase-MiniLM-L6-v2"],
+                        index=0,
+                        help="Model used to generate local vectors for Weaviate."
+                    )
+                    auto_create_collection = st.checkbox(
+                        "Create collection if missing", value=True,
+                        help="If enabled, the app will attempt to create the Weaviate collection when it does not exist."
+                    )
+                    # Set environment flags used by the ingestion/helper
+                    if auto_create_collection:
+                        os.environ["WEAVIATE_CREATE_COLLECTIONS"] = "true"
+                    else:
+                        os.environ["WEAVIATE_CREATE_COLLECTIONS"] = "false"
+                    # Enable client-side query vectors for better retrieval when using local vectors
+                    if use_local_embeddings:
+                        os.environ["WEAVIATE_USE_CLIENT_VECTORS"] = "true"
                 else:
                     st.error("❌ Weaviate connection failed. Check WEAVIATE_URL / WEAVIATE_API_KEY in config/weaviate.env or environment. You can switch to 'Local FAISS Index' as a fallback.")
             except Exception as ce:
@@ -211,7 +234,9 @@ def render_document_ingestion(user, permissions, auth_middleware, available_inde
                             username=username,
                             chunk_size=chunk_size,
                             chunk_overlap=chunk_overlap,
-                            use_semantic_chunking=use_semantic
+                            use_semantic_chunking=use_semantic,
+                            use_local_embeddings=locals().get("use_local_embeddings", False),
+                            embedding_model=locals().get("embedding_model", "all-MiniLM-L6-v2")
                         )
                         
                     elif source_type == "Text File" and uploaded_file:
@@ -228,7 +253,9 @@ def render_document_ingestion(user, permissions, auth_middleware, available_inde
                             username=username,
                             chunk_size=chunk_size,
                             chunk_overlap=chunk_overlap,
-                            use_semantic_chunking=use_semantic
+                            use_semantic_chunking=use_semantic,
+                            use_local_embeddings=locals().get("use_local_embeddings", False),
+                            embedding_model=locals().get("embedding_model", "all-MiniLM-L6-v2")
                         )
                         
                     elif source_type == "Website URL" and url_input:
@@ -240,7 +267,9 @@ def render_document_ingestion(user, permissions, auth_middleware, available_inde
                             chunk_size=chunk_size,
                             chunk_overlap=chunk_overlap,
                             use_semantic_chunking=use_semantic,
-                            render_js=render_js
+                            render_js=render_js,
+                            use_local_embeddings=locals().get("use_local_embeddings", False),
+                            embedding_model=locals().get("embedding_model", "all-MiniLM-L6-v2")
                         )
                     else:
                         st.error("Please provide the required input for the selected source type.")
