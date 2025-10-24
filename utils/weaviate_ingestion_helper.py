@@ -426,7 +426,9 @@ class WeaviateIngestionHelper:
                         text_content,
                         document_name=file_name,
                         chunk_size=chunk_size,
-                        chunk_overlap=chunk_overlap
+                        chunk_overlap=chunk_overlap,
+                        # Disable OpenAI embedding calls during chunking; we compute vectors below if requested
+                        use_embeddings=False
                     )
                     chunk_texts = [chunk['content'] for chunk in chunks]
                 except Exception as e:
