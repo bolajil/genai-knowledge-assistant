@@ -100,11 +100,12 @@ def render_index_list(index_type: str, indexes: list):
                     st.write("📦 Info unavailable")
             
             with col3:
-                if st.button("ℹ️", key=f"info_{index_name}_{i}", help="View details"):
+                # Prefix keys with index_type to avoid collisions across tabs
+                if st.button("ℹ️", key=f"info_{index_type}_{index_name}_{i}", help="View details"):
                     show_index_details(index_name)
             
             with col4:
-                if st.button("🗑️", key=f"delete_{index_name}_{i}", help="Delete index"):
+                if st.button("🗑️", key=f"delete_{index_type}_{index_name}_{i}", help="Delete index"):
                     confirm_delete_index(index_name)
 
 def show_index_details(index_name: str):
