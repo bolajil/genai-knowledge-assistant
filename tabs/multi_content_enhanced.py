@@ -22,6 +22,8 @@ from utils.text_cleaning import (
 )
 from utils.enterprise_search_engine import get_enterprise_search_engine
 from utils.enterprise_response_formatter import get_enterprise_formatter
+from utils.excel_ai_assistant import ExcelAIAssistant
+from utils.llm_config import get_available_llm_models, get_default_llm_model, validate_llm_setup
 try:
     from langchain_openai import ChatOpenAI
     from langchain_core.prompts import ChatPromptTemplate
@@ -1779,6 +1781,20 @@ def render_excel_ai_assistant(excel_data: Dict[str, pd.DataFrame]):
     
     with st.expander("🤖 AI Excel Assistant", expanded=True):
         st.markdown("**Get AI-powered help with your Excel data analysis and automation**")
+        # LLM model selection
+        try:
+            models = get_available_llm_models()
+            default_model = get_default_llm_model()
+            idx = models.index(default_model) if default_model in models else 0
+            selected_model = st.selectbox("LLM Model", options=models, index=idx, key="excel_ai_model")
+            model_ok, model_msg = validate_llm_setup(selected_model)
+        except Exception:
+            selected_model = None
+            model_ok = False
+            model_msg = "LLM configuration not available"
+        assistant = ExcelAIAssistant(model_name=selected_model) if model_ok else None
+        if not model_ok:
+            st.info(f"LLM not configured: {model_msg}. Falling back to local heuristics.")
         
         # Sheet selection for AI analysis
         sheet_names = list(excel_data.keys())
@@ -1807,14 +1823,23 @@ def render_excel_ai_assistant(excel_data: Dict[str, pd.DataFrame]):
                 
                 if st.button("📊 Generate Data Insights", key="ai_insights"):
                     with st.spinner("AI analyzing your data..."):
-                        insights = generate_data_insights(df, selected_sheet)
+                        insights = (assistant.generate_insights(df, selected_sheet) if assistant else generate_data_insights(df, selected_sheet))
                         st.markdown("### 🔍 AI Data Insights")
                         st.write(insights)
                 
                 if st.button("📈 Suggest Charts", key="ai_charts"):
                     with st.spinner("AI suggesting visualizations..."):
                         st.session_state[show_key] = True
-                        st.session_state[sugg_key] = suggest_charts(df, selected_sheet)
+                        suggestions_text = None
+                        if assistant:
+                            recs = assistant.recommend_charts(df, selected_sheet)
+                            if isinstance(recs, list) and recs:
+                                lines = []
+                                for r in recs:
+                                    title = (r.get("title") or r.get("chart_type") or "Chart")
+                                    lines.append(f"- {title} ({r.get('chart_type')}): x={r.get('x')}, y={r.get('y')}, group_by={r.get('group_by')}. Reason: {r.get('reason')}")
+                                suggestions_text = "\n".join(lines)
+                        st.session_state[sugg_key] = suggestions_text or suggest_charts(df, selected_sheet)
 
                 # Persistent chart tools section (remains visible after reruns)
                 if st.session_state.get(show_key, False):
@@ -1865,16 +1890,32 @@ def render_excel_ai_assistant(excel_data: Dict[str, pd.DataFrame]):
                 if st.button("🚀 Ask AI", key="ai_ask"):
                     if user_query:
                         with st.spinner("AI processing your question..."):
-                            ai_response = process_ai_query(df, selected_sheet, user_query)
-                            st.markdown("### 🤖 AI Response")
-                            st.write(ai_response)
+                            did_code = False
+                            if assistant:
+                                try:
+                                    code = assistant.nlq_to_code(df, user_query)
+                                except Exception:
+                                    code = ""
+                                if code:
+                                    did_code = True
+                                    st.markdown("### 💻 Generated Code")
+                                    st.code(code, language="python")
+                                    try:
+                                        result = execute_safe_code(code, df)
+                                        if isinstance(result, pd.DataFrame):
+                                            st.markdown("### ✅ Result DataFrame")
+                                            st.dataframe(result.head(100), use_container_width=True)
+                                            st.session_state[f"processed_data_{selected_sheet}"] = result
+                                        else:
+                                            st.markdown("### ✅ Result")
+                                            st.write(result)
+                                    except Exception as e:
+                                        st.error(f"Code execution failed: {str(e)}")
+                            if not did_code:
+                                ai_response = process_ai_query(df, selected_sheet, user_query)
+                                st.markdown("### 🤖 AI Response")
+                                st.markdown(ai_response)
                             
-                            # If AI suggests code, show it
-                            if "```python" in ai_response:
-                                st.markdown("### 💻 Generated Code")
-                                code_match = ai_response.split("```python")[1].split("```")[0]
-                                st.code(code_match, language="python")
-                                
                     else:
                         st.warning("Please enter a question about your data")
                 
@@ -2789,26 +2830,24 @@ def generate_auto_charts(df: pd.DataFrame, sheet_name: str, max_charts: int = 3)
 def execute_safe_code(code: str, df: pd.DataFrame):
     """Safely execute AI-generated code"""
     try:
-        # Create a safe execution environment
+        blocked = [
+            "import ", "os.", "sys.", "subprocess", "open(", "eval(", "exec(", "__",
+            "pickle", "requests.", "socket", "pathlib", "to_csv(", "to_excel(", "to_parquet(",
+            "read_csv(", "read_excel(", "read_parquet("
+        ]
+        low = (code or "").lower()
+        for tok in blocked:
+            if tok in low:
+                raise Exception("Generated code contains disallowed operations")
         safe_globals = {
             'df': df,
             'pd': pd,
             'np': np,
-            'print': print,
-            'len': len,
-            'sum': sum,
-            'max': max,
-            'min': min,
-            'abs': abs,
-            'round': round
+            'result': None,
         }
-        
-        # Execute the code
-        exec_globals = safe_globals.copy()
-        exec(code, exec_globals)
-        
-        # Return any modified dataframe
-        return exec_globals.get('result', None)
+        local_env = {}
+        exec(code, safe_globals, local_env)
+        return local_env.get('result', safe_globals.get('result'))
         
     except Exception as e:
         raise Exception(f"Code execution failed: {str(e)}")

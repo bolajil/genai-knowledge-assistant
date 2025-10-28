@@ -119,6 +119,10 @@ def render_document_ingestion(user, permissions, auth_middleware, available_inde
                         "Create collection if missing", value=True,
                         help="If enabled, the app will attempt to create the Weaviate collection when it does not exist."
                     )
+                    force_rest_batch = st.checkbox(
+                        "Use REST batch insertion (diagnostics)", value=True,
+                        help="Send objects via REST /v1/batch/objects to capture per-object errors and reliable post-counts."
+                    )
                     # Set environment flags used by the ingestion/helper
                     if auto_create_collection:
                         os.environ["WEAVIATE_CREATE_COLLECTIONS"] = "true"
@@ -127,6 +131,8 @@ def render_document_ingestion(user, permissions, auth_middleware, available_inde
                     # Enable client-side query vectors for better retrieval when using local vectors
                     if use_local_embeddings:
                         os.environ["WEAVIATE_USE_CLIENT_VECTORS"] = "true"
+                    # Force REST batch path for per-object diagnostics
+                    os.environ["WEAVIATE_FORCE_REST_BATCH"] = "true" if force_rest_batch else "false"
                 else:
                     st.error("❌ Weaviate connection failed. Check WEAVIATE_URL / WEAVIATE_API_KEY in config/weaviate.env or environment. You can switch to 'Local FAISS Index' as a fallback.")
             except Exception as ce:
