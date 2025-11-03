@@ -677,9 +677,6 @@ def render_faiss_ingestion(username):
         st.subheader("🗑️ Index Management")
         
         # Get list of existing indexes
-        import os
-        from pathlib import Path
-        
         index_base_dir = "data/indexes"
         faiss_base_dir = "data/faiss_index"
         
