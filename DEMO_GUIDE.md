@@ -20,11 +20,15 @@ streamlit run genai_dashboard_modular.py
 
 ### Demo Flow
 
-#### 1. **Document Ingestion** (1 min)
+#### 1. **Document Ingestion with Quality Check** (1 min)
 - Navigate to **📄 Ingest Document** tab
 - Upload sample PDF (Bylaws, Policy, etc.)
-- Show real-time progress: chunking → embedding → indexing
-- **Key point:** "Documents are processed in seconds, not hours"
+- **NEW:** Show automatic quality analysis
+  - Quality score displayed (0-1 scale)
+  - Issues detected (missing spaces, OCR errors)
+  - One-click cleaning option
+- Show real-time progress: quality check → chunking → embedding → indexing
+- **Key point:** "Documents are automatically checked and cleaned for optimal quality"
 
 #### 2. **Intelligent Query** (2 min)
 - Go to **🔍 Query Assistant** tab

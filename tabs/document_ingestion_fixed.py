@@ -150,11 +150,98 @@ def render_weaviate_ingestion(username):
     
     # Collection name input
     st.subheader("📚 Collection Configuration")
-    collection_name = st.text_input(
-        "Collection Name",
-        value="",
-        help="Enter a name for your Weaviate collection (e.g., 'company_docs', 'bylaws_2024')"
-    )
+    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        collection_name = st.text_input(
+            "Collection Name",
+            value="",
+            help="Enter a name for your Weaviate collection (e.g., 'company_docs', 'bylaws_2024')"
+        )
+    
+    with col2:
+        st.write("")  # Spacing
+        st.write("")  # Spacing
+        if st.button("🗑️ Manage Collections", key="manage_weaviate_collections", help="Delete or clear existing collections"):
+            st.session_state.show_collection_manager = True
+    
+    # Collection Management UI
+    if st.session_state.get('show_collection_manager', False):
+        st.markdown("---")
+        st.subheader("🗑️ Collection Management")
+        
+        try:
+            from utils.weaviate_manager import get_weaviate_manager
+            wm = get_weaviate_manager()
+            collections = wm.list_collections() or []
+            
+            if collections:
+                st.info(f"📊 Found {len(collections)} collections")
+                
+                # Get collection details
+                collection_details = []
+                for coll_name in collections:
+                    try:
+                        stats = wm.get_collection_stats(coll_name)
+                        obj_count = stats.get('total_objects', 0) if stats else 0
+                        collection_details.append({
+                            'name': coll_name,
+                            'objects': obj_count,
+                            'status': 'Empty' if obj_count == 0 else f'{obj_count} objects'
+                        })
+                    except:
+                        collection_details.append({
+                            'name': coll_name,
+                            'objects': 0,
+                            'status': 'Unknown'
+                        })
+                
+                # Select collection to delete
+                collection_options = [f"{coll['name']} - {coll['status']}" for coll in collection_details]
+                selected_display = st.selectbox(
+                    "Select collection to delete:",
+                    ["-- Select a collection --"] + collection_options,
+                    key="selected_collection_to_delete"
+                )
+                
+                if selected_display != "-- Select a collection --":
+                    selected_coll = collection_details[collection_options.index(selected_display)]
+                    
+                    st.warning(f"⚠️ You are about to delete: **{selected_coll['name']}**")
+                    st.write(f"- Type: Weaviate Collection")
+                    st.write(f"- Status: {selected_coll['status']}")
+                    st.write(f"- Objects: {selected_coll['objects']}")
+                    
+                    col1, col2, col3 = st.columns([1, 1, 2])
+                    with col1:
+                        if st.button("🗑️ Delete Collection", type="primary", key="confirm_delete_weaviate"):
+                            try:
+                                wm.delete_collection(selected_coll['name'])
+                                st.success(f"✅ Deleted {selected_coll['name']}")
+                                st.info("🔄 Refresh the page to see updated list")
+                                # Clear the flag after successful deletion
+                                if 'show_collection_manager' in st.session_state:
+                                    del st.session_state.show_collection_manager
+                            except Exception as e:
+                                st.error(f"❌ Error deleting collection: {e}")
+                    
+                    with col2:
+                        if st.button("❌ Cancel", key="cancel_delete_weaviate"):
+                            st.session_state.show_collection_manager = False
+                            st.rerun()
+            else:
+                st.info("📭 No collections found")
+                if st.button("Close", key="close_empty_collection_manager"):
+                    st.session_state.show_collection_manager = False
+                    st.rerun()
+        
+        except Exception as e:
+            st.error(f"❌ Error accessing Weaviate: {e}")
+            if st.button("Close", key="close_error_collection_manager"):
+                st.session_state.show_collection_manager = False
+                st.rerun()
+        
+        st.markdown("---")
     
     if not collection_name:
         st.warning("⚠️ Please enter a collection name to proceed")
@@ -255,6 +342,139 @@ def render_weaviate_ingestion(username):
             f"Choose {source_type}",
             type=file_types
         )
+        
+        # NEW: Document Quality Check (before ingestion)
+        if uploaded_file is not None:
+            st.markdown("---")
+            st.subheader("📊 Document Quality Check")
+            st.write(f"🔍 Analyzing: {uploaded_file.name}")
+            
+            # Extract text for preview
+            preview_text = None
+            try:
+                if source_type == "PDF File":
+                    from utils.robust_pdf_extractor import extract_text_from_pdf_robust
+                    pdf_bytes = uploaded_file.getvalue()
+                    preview_text, method = extract_text_from_pdf_robust(pdf_bytes, uploaded_file.name)
+                    st.info(f"📄 Extraction method: {method}")
+                else:  # Text File
+                    try:
+                        preview_text = uploaded_file.getvalue().decode("utf-8")
+                    except UnicodeDecodeError:
+                        preview_text = uploaded_file.getvalue().decode("latin-1")
+                
+                # Run quality check
+                if preview_text:
+                    from utils.document_quality_checker import check_document_quality, clean_document, get_quality_emoji, get_quality_label
+                    
+                    with st.spinner("🔍 Analyzing document quality..."):
+                        quality_result = check_document_quality(preview_text)
+                    
+                    quality_score = quality_result['quality_score']
+                    emoji = get_quality_emoji(quality_score)
+                    label = get_quality_label(quality_score)
+                    
+                    # Display quality score
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Quality Score", f"{quality_score:.2f}", delta=label)
+                    with col2:
+                        st.metric("Issues Found", len(quality_result['issues']))
+                    with col3:
+                        st.metric("Total Words", f"{quality_result['stats']['total_words']:,}")
+                    
+                    # Show issues if any
+                    if quality_result['issues']:
+                        with st.expander(f"⚠️ View {len(quality_result['issues'])} Quality Issues"):
+                            for issue in quality_result['issues']:
+                                st.write(f"**{issue.description}**")
+                                st.write(f"  - Severity: {issue.severity.title()}")
+                                st.write(f"  - Count: {issue.count} occurrences")
+                                if issue.examples:
+                                    st.code(", ".join(issue.examples[:3]), language=None)
+                                st.write("")
+                    
+                    # Store in session state for use during ingestion
+                    if 'document_quality' not in st.session_state:
+                        st.session_state.document_quality = {}
+                    
+                    # Initialize if not exists
+                    if uploaded_file.name not in st.session_state.document_quality:
+                        st.session_state.document_quality[uploaded_file.name] = {
+                            'original_text': preview_text,
+                            'quality_score': quality_score,
+                            'should_clean': False,
+                            'cleaned_text': None,
+                            'new_score': None
+                        }
+                    
+                    # Show cleaning options based on quality
+                    if quality_score < 0.8:
+                        st.warning(f"⚠️ Low quality detected ({quality_score:.2f}). Cleaning recommended before ingestion.")
+                        default_choice = 0  # Default to "Clean"
+                    else:
+                        st.success(f"✅ Document quality is good ({quality_score:.2f})")
+                        st.info("💡 You can still choose to clean the document if needed")
+                        default_choice = 1  # Default to "Use Original"
+                    
+                    # ALWAYS show radio buttons - let user choose
+                    st.subheader("Choose Version for Ingestion:")
+                    choice = st.radio(
+                        "Select which version to use:",
+                        ["✨ Clean Document", "➡️ Use Original Document"],
+                        index=default_choice,
+                        key=f"quality_choice_{uploaded_file.name}",
+                        help="Clean version will fix spacing, OCR errors, and repeated characters"
+                    )
+                    
+                    # Process based on choice
+                    if choice == "✨ Clean Document":
+                        # Check if we already cleaned it
+                        if st.session_state.document_quality[uploaded_file.name].get('cleaned_text') is None:
+                            with st.spinner("🧹 Cleaning document..."):
+                                cleaned_text, changes = clean_document(preview_text, aggressive=False)
+                            
+                            # Show changes
+                            st.success("✅ Document cleaned successfully!")
+                            
+                            change_col1, change_col2, change_col3 = st.columns(3)
+                            with change_col1:
+                                st.metric("Spaces Added", changes['spaces_added'])
+                            with change_col2:
+                                st.metric("Repeated Removed", changes['repeated_chars_removed'])
+                            with change_col3:
+                                st.metric("Special Removed", changes['special_chars_removed'])
+                            
+                            # Re-check quality
+                            new_result = check_document_quality(cleaned_text)
+                            new_score = new_result['quality_score']
+                            improvement = new_score - quality_score
+                            
+                            st.metric("New Quality Score", f"{new_score:.2f}", delta=f"+{improvement:.2f}")
+                            
+                            # Store cleaned version
+                            st.session_state.document_quality[uploaded_file.name]['cleaned_text'] = cleaned_text
+                            st.session_state.document_quality[uploaded_file.name]['new_score'] = new_score
+                        else:
+                            # Already cleaned, show stored results
+                            st.success("✅ Using previously cleaned version")
+                            new_score = st.session_state.document_quality[uploaded_file.name]['new_score']
+                            improvement = new_score - quality_score
+                            st.metric("Quality Score", f"{new_score:.2f}", delta=f"+{improvement:.2f}")
+                        
+                        st.session_state.document_quality[uploaded_file.name]['should_clean'] = True
+                        st.info("✅ Cleaned version will be used for ingestion")
+                    
+                    else:  # Use Original
+                        st.session_state.document_quality[uploaded_file.name]['should_clean'] = False
+                        st.info("ℹ️ Original version will be used for ingestion")
+                        
+            except Exception as e:
+                st.warning(f"⚠️ Quality check unavailable: {str(e)}")
+                logger.warning(f"Quality check failed: {e}")
+            
+            st.markdown("---")
+    
     elif source_type == "Website URL":
         url_input = st.text_input("Enter Website URL:")
         render_js = st.checkbox("Render JavaScript", value=False)
@@ -315,26 +535,6 @@ def render_weaviate_ingestion(username):
                     st.error(f"❌ Failed to create collection '{collection_name}'")
                     return
                 
-                progress_bar.progress(30)
-                
-                # Process based on source type
-                if source_type == "PDF File":
-                    status_text.text("📄 Processing PDF...")
-                    success = weaviate_helper.ingest_pdf(
-                        collection_name=collection_name,
-                        pdf_file=uploaded_file,
-                        chunk_size=chunk_size,
-                        chunk_overlap=chunk_overlap,
-                        use_semantic_chunking=(
-                            chunking_strategy == "Semantic Chunking (Recommended)"
-                        ),
-                        split_by_headers=split_by_headers,
-                        use_embeddings=use_embeddings,
-                        use_local_embeddings=use_local_embeddings_ui,
-                        embedding_model=embedding_model_ui,
-                    )
-                
-                elif source_type == "Text File":
                     status_text.text("📝 Processing text file...")
                     success = weaviate_helper.ingest_text_file(
                         collection_name=collection_name,
@@ -452,15 +652,98 @@ def render_faiss_ingestion(username):
     """Render FAISS ingestion interface (fallback)"""
     
     st.subheader("📁 Index Configuration")
-    index_name = st.text_input(
-        "Index Name",
-        value="document_index",
-        help="Enter a name for your FAISS index"
-    )
+    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        index_name = st.text_input(
+            "Index Name",
+            value="document_index",
+            help="Enter a name for your FAISS index"
+        )
+    
+    with col2:
+        st.write("")  # Spacing
+        st.write("")  # Spacing
+        if st.button("🗑️ Manage Indexes", key="manage_faiss_indexes", help="Delete or clear existing indexes"):
+            st.session_state.show_index_manager = True
     
     if not index_name.strip():
         index_name = "document_index"
         st.info("Using default index name: document_index")
+    
+    # Index Management UI
+    if st.session_state.get('show_index_manager', False):
+        st.markdown("---")
+        st.subheader("🗑️ Index Management")
+        
+        # Get list of existing indexes
+        import os
+        from pathlib import Path
+        
+        index_base_dir = "data/indexes"
+        faiss_base_dir = "data/faiss_index"
+        
+        all_indexes = []
+        
+        # Scan for indexes
+        for base_dir in [index_base_dir, faiss_base_dir]:
+            if os.path.exists(base_dir):
+                for item in os.listdir(base_dir):
+                    item_path = os.path.join(base_dir, item)
+                    if os.path.isdir(item_path):
+                        file_count = sum(1 for _ in Path(item_path).rglob('*') if _.is_file())
+                        all_indexes.append({
+                            'name': item,
+                            'path': item_path,
+                            'type': 'FAISS' if 'faiss' in base_dir else 'Text',
+                            'files': file_count,
+                            'status': 'Empty' if file_count == 0 else f'{file_count} files'
+                        })
+        
+        if all_indexes:
+            st.info(f"📊 Found {len(all_indexes)} indexes")
+            
+            # Select index to delete
+            index_options = [f"{idx['name']} ({idx['type']}) - {idx['status']}" for idx in all_indexes]
+            selected_display = st.selectbox(
+                "Select index to delete:",
+                ["-- Select an index --"] + index_options,
+                key="selected_index_to_delete"
+            )
+            
+            if selected_display != "-- Select an index --":
+                selected_idx = all_indexes[index_options.index(selected_display)]
+                
+                st.warning(f"⚠️ You are about to delete: **{selected_idx['name']}**")
+                st.write(f"- Type: {selected_idx['type']}")
+                st.write(f"- Status: {selected_idx['status']}")
+                st.write(f"- Path: `{selected_idx['path']}`")
+                
+                col1, col2, col3 = st.columns([1, 1, 2])
+                with col1:
+                    if st.button("🗑️ Delete Index", type="primary", key="confirm_delete"):
+                        try:
+                            import shutil
+                            shutil.rmtree(selected_idx['path'])
+                            st.success(f"✅ Deleted {selected_idx['name']}")
+                            st.info("🔄 Refresh the page to see updated list")
+                            # Clear the flag after successful deletion
+                            if 'show_index_manager' in st.session_state:
+                                del st.session_state.show_index_manager
+                        except Exception as e:
+                            st.error(f"❌ Error deleting index: {e}")
+                
+                with col2:
+                    if st.button("❌ Cancel", key="cancel_delete"):
+                        st.session_state.show_index_manager = False
+                        st.rerun()
+        else:
+            st.info("📭 No indexes found")
+            if st.button("Close", key="close_empty_manager"):
+                st.session_state.show_index_manager = False
+                st.rerun()
+        
+        st.markdown("---")
     
     # Source type selection
     st.subheader("📥 Document Source")
@@ -496,6 +779,139 @@ def render_faiss_ingestion(username):
             f"Choose {source_type}",
             type=file_types
         )
+        
+        # NEW: Document Quality Check (before ingestion) - FAISS version
+        if uploaded_file is not None:
+            st.markdown("---")
+            st.subheader("📊 Document Quality Check")
+            st.write(f"🔍 Analyzing: {uploaded_file.name}")
+            
+            # Extract text for preview
+            preview_text = None
+            try:
+                if source_type == "PDF File":
+                    from utils.robust_pdf_extractor import extract_text_from_pdf_robust
+                    pdf_bytes = uploaded_file.getvalue()
+                    preview_text, method = extract_text_from_pdf_robust(pdf_bytes, uploaded_file.name)
+                    st.info(f"📄 Extraction method: {method}")
+                else:  # Text File
+                    try:
+                        preview_text = uploaded_file.getvalue().decode("utf-8")
+                    except UnicodeDecodeError:
+                        preview_text = uploaded_file.getvalue().decode("latin-1")
+                
+                # Run quality check
+                if preview_text:
+                    from utils.document_quality_checker import check_document_quality, clean_document, get_quality_emoji, get_quality_label
+                    
+                    with st.spinner("🔍 Analyzing document quality..."):
+                        quality_result = check_document_quality(preview_text)
+                    
+                    quality_score = quality_result['quality_score']
+                    emoji = get_quality_emoji(quality_score)
+                    label = get_quality_label(quality_score)
+                    
+                    # Display quality score
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Quality Score", f"{quality_score:.2f}", delta=label)
+                    with col2:
+                        st.metric("Issues Found", len(quality_result['issues']))
+                    with col3:
+                        st.metric("Total Words", f"{quality_result['stats']['total_words']:,}")
+                    
+                    # Show issues if any
+                    if quality_result['issues']:
+                        with st.expander(f"⚠️ View {len(quality_result['issues'])} Quality Issues"):
+                            for issue in quality_result['issues']:
+                                st.write(f"**{issue.description}**")
+                                st.write(f"  - Severity: {issue.severity.title()}")
+                                st.write(f"  - Count: {issue.count} occurrences")
+                                if issue.examples:
+                                    st.code(", ".join(issue.examples[:3]), language=None)
+                                st.write("")
+                    
+                    # Store in session state for use during ingestion
+                    if 'document_quality_faiss' not in st.session_state:
+                        st.session_state.document_quality_faiss = {}
+                    
+                    # Initialize if not exists
+                    if uploaded_file.name not in st.session_state.document_quality_faiss:
+                        st.session_state.document_quality_faiss[uploaded_file.name] = {
+                            'original_text': preview_text,
+                            'quality_score': quality_score,
+                            'should_clean': False,
+                            'cleaned_text': None,
+                            'new_score': None
+                        }
+                    
+                    # Show cleaning options based on quality
+                    if quality_score < 0.8:
+                        st.warning(f"⚠️ Low quality detected ({quality_score:.2f}). Cleaning recommended before ingestion.")
+                        default_choice = 0  # Default to "Clean"
+                    else:
+                        st.success(f"✅ Document quality is good ({quality_score:.2f})")
+                        st.info("💡 You can still choose to clean the document if needed")
+                        default_choice = 1  # Default to "Use Original"
+                    
+                    # ALWAYS show radio buttons - let user choose
+                    st.subheader("Choose Version for Ingestion:")
+                    choice = st.radio(
+                        "Select which version to use:",
+                        ["✨ Clean Document", "➡️ Use Original Document"],
+                        index=default_choice,
+                        key=f"quality_choice_faiss_{uploaded_file.name}",
+                        help="Clean version will fix spacing, OCR errors, and repeated characters"
+                    )
+                    
+                    # Process based on choice
+                    if choice == "✨ Clean Document":
+                        # Check if we already cleaned it
+                        if st.session_state.document_quality_faiss[uploaded_file.name].get('cleaned_text') is None:
+                            with st.spinner("🧹 Cleaning document..."):
+                                cleaned_text, changes = clean_document(preview_text, aggressive=False)
+                            
+                            # Show changes
+                            st.success("✅ Document cleaned successfully!")
+                            
+                            change_col1, change_col2, change_col3 = st.columns(3)
+                            with change_col1:
+                                st.metric("Spaces Added", changes['spaces_added'])
+                            with change_col2:
+                                st.metric("Repeated Removed", changes['repeated_chars_removed'])
+                            with change_col3:
+                                st.metric("Special Removed", changes['special_chars_removed'])
+                            
+                            # Re-check quality
+                            new_result = check_document_quality(cleaned_text)
+                            new_score = new_result['quality_score']
+                            improvement = new_score - quality_score
+                            
+                            st.metric("New Quality Score", f"{new_score:.2f}", delta=f"+{improvement:.2f}")
+                            
+                            # Store cleaned version
+                            st.session_state.document_quality_faiss[uploaded_file.name]['cleaned_text'] = cleaned_text
+                            st.session_state.document_quality_faiss[uploaded_file.name]['new_score'] = new_score
+                        else:
+                            # Already cleaned, show stored results
+                            st.success("✅ Using previously cleaned version")
+                            new_score = st.session_state.document_quality_faiss[uploaded_file.name]['new_score']
+                            improvement = new_score - quality_score
+                            st.metric("Quality Score", f"{new_score:.2f}", delta=f"+{improvement:.2f}")
+                        
+                        st.session_state.document_quality_faiss[uploaded_file.name]['should_clean'] = True
+                        st.info("✅ Cleaned version will be used for ingestion")
+                    
+                    else:  # Use Original
+                        st.session_state.document_quality_faiss[uploaded_file.name]['should_clean'] = False
+                        st.info("ℹ️ Original version will be used for ingestion")
+                        
+            except Exception as e:
+                st.warning(f"⚠️ Quality check unavailable: {str(e)}")
+                logger.warning(f"Quality check failed: {e}")
+            
+            st.markdown("---")
+    
     elif source_type == "Website URL":
         url_input = st.text_input("Enter Website URL:")
         render_js = st.checkbox("Render JavaScript", value=False)
@@ -557,6 +973,57 @@ def render_faiss_ingestion(username):
                             st.info(f"📄 Extraction: {method} | Quality: {quality:.2f}")
                             if not is_valid:
                                 st.warning(f"⚠️ {message}")
+                            
+                            # NEW: Document Quality Check and Cleaning
+                            try:
+                                from utils.document_quality_checker import check_document_quality, clean_document, get_quality_emoji, get_quality_label
+                                
+                                status_text.text("🔍 Analyzing document quality...")
+                                quality_result = check_document_quality(text_content)
+                                quality_score = quality_result['quality_score']
+                                
+                                # Display quality score
+                                emoji = get_quality_emoji(quality_score)
+                                label = get_quality_label(quality_score)
+                                st.info(f"{emoji} Document Quality: {quality_score:.2f} ({label})")
+                                
+                                # Show issues if any
+                                if quality_result['issues']:
+                                    with st.expander(f"⚠️ {len(quality_result['issues'])} Quality Issues Detected"):
+                                        for issue in quality_result['issues'][:3]:  # Show top 3
+                                            st.write(f"• {issue.description} ({issue.count} occurrences)")
+                                
+                                # Auto-clean if quality is low
+                                if quality_score < 0.8:
+                                    st.warning(f"⚠️ Low quality detected ({quality_score:.2f}). Cleaning recommended.")
+                                    
+                                    # Show cleaning option
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        if st.button("✨ Clean Document", key=f"clean_{uploaded_file.name}"):
+                                            status_text.text("🧹 Cleaning document...")
+                                            cleaned_text, changes = clean_document(text_content, aggressive=False)
+                                            
+                                            # Show changes
+                                            st.success(f"✅ Cleaned! Spaces added: {changes['spaces_added']}, Repeated chars removed: {changes['repeated_chars_removed']}")
+                                            
+                                            # Re-check quality
+                                            new_result = check_document_quality(cleaned_text)
+                                            new_score = new_result['quality_score']
+                                            improvement = new_score - quality_score
+                                            st.metric("New Quality Score", f"{new_score:.2f}", delta=f"+{improvement:.2f}")
+                                            
+                                            # Use cleaned text
+                                            text_content = cleaned_text
+                                    
+                                    with col2:
+                                        if st.button("➡️ Use Original", key=f"original_{uploaded_file.name}"):
+                                            st.info("Using original document")
+                                
+                            except Exception as e:
+                                logger.warning(f"Quality check failed: {e}")
+                                st.warning(f"⚠️ Quality check unavailable: {e}")
+                        
                         else:
                             text_content = f"[PDF text extraction failed for {uploaded_file.name}]"
                             st.error("❌ All extraction methods failed")
@@ -588,6 +1055,53 @@ def render_faiss_ingestion(username):
                         text_content = uploaded_file.getvalue().decode("utf-8")
                     except UnicodeDecodeError:
                         text_content = uploaded_file.getvalue().decode("latin-1")
+                    
+                    # NEW: Document Quality Check and Cleaning for text files
+                    try:
+                        from utils.document_quality_checker import check_document_quality, clean_document, get_quality_emoji, get_quality_label
+                        
+                        status_text.text("🔍 Analyzing document quality...")
+                        quality_result = check_document_quality(text_content)
+                        quality_score = quality_result['quality_score']
+                        
+                        # Display quality score
+                        emoji = get_quality_emoji(quality_score)
+                        label = get_quality_label(quality_score)
+                        st.info(f"{emoji} Document Quality: {quality_score:.2f} ({label})")
+                        
+                        # Show issues if any
+                        if quality_result['issues']:
+                            with st.expander(f"⚠️ {len(quality_result['issues'])} Quality Issues Detected"):
+                                for issue in quality_result['issues'][:3]:
+                                    st.write(f"• {issue.description} ({issue.count} occurrences)")
+                        
+                        # Auto-clean if quality is low
+                        if quality_score < 0.8:
+                            st.warning(f"⚠️ Low quality detected ({quality_score:.2f}). Cleaning recommended.")
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.button("✨ Clean Document", key=f"clean_txt_{uploaded_file.name}"):
+                                    status_text.text("🧹 Cleaning document...")
+                                    cleaned_text, changes = clean_document(text_content, aggressive=False)
+                                    
+                                    st.success(f"✅ Cleaned! Spaces added: {changes['spaces_added']}, Repeated chars removed: {changes['repeated_chars_removed']}")
+                                    
+                                    # Re-check quality
+                                    new_result = check_document_quality(cleaned_text)
+                                    new_score = new_result['quality_score']
+                                    improvement = new_score - quality_score
+                                    st.metric("New Quality Score", f"{new_score:.2f}", delta=f"+{improvement:.2f}")
+                                    
+                                    text_content = cleaned_text
+                            
+                            with col2:
+                                if st.button("➡️ Use Original", key=f"original_txt_{uploaded_file.name}"):
+                                    st.info("Using original document")
+                    
+                    except Exception as e:
+                        logger.warning(f"Quality check failed: {e}")
+                        st.warning(f"⚠️ Quality check unavailable: {e}")
                     
                     # Save the uploaded text file
                     with open(index_dir / f"source_document.txt", "w", encoding="utf-8") as f:
