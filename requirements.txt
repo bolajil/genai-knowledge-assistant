@@ -6,6 +6,7 @@ requests-html
 langchain
 langchain-community
 langchain-experimental
+langgraph>=0.0.20
 faiss-cpu
 pandas
 plotly>=5.17.0
