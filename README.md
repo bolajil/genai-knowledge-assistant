@@ -10,6 +10,7 @@ Enterprise-grade AI assistant for finding trusted answers across your organizati
 Quick links
 - Demo repo (Streamlit, Demo Mode)
 - Live demo URL: configure via Streamlit Community Cloud (Main file: `app.py`, Python 3.10)https://genai-knowledge-assistant-8gmzhaf3k4wduueal3u4ks.streamlit.app/
+- Request a User login and Password from this email: bolafiz2001@gmail.com
 - ICP (Ideal Customer Profile): see [docs/ICP.md](docs/ICP.md)
 - One‑pager / Deck: coming soon (docs/)
 
