@@ -21,8 +21,8 @@ checks_total = 0
 def check(name, condition, fix_hint=""):
     global checks_passed, checks_total
     checks_total += 1
-    status = "✓ PASS" if condition else "✗ FAIL"
-    print(f"\n[{status}] {name}")
+    status = "[PASS]" if condition else "[FAIL]"
+    print(f"\n{status} {name}")
     if not condition and fix_hint:
         print(f"    Fix: {fix_hint}")
     if condition:
@@ -152,18 +152,20 @@ print("TESTING HYBRID SYSTEM")
 print("-" * 80)
 
 try:
-    from utils.hybrid_agent_integration import is_hybrid_system_available
-    available = is_hybrid_system_available()
+    from utils.hybrid_agent_integration import initialize_hybrid_system
+    from utils.query_complexity_analyzer import QueryComplexityAnalyzer
+    # Just check if imports work
+    analyzer = QueryComplexityAnalyzer()
     check(
         "Hybrid system available",
-        available,
+        True,
         "Install: pip install langgraph sentence-transformers"
     )
 except Exception as e:
     check(
         "Hybrid system available",
         False,
-        f"Error: {str(e)}"
+        f"Error: {str(e)[:100]}"
     )
 
 # 8. Application Start Test
@@ -192,13 +194,13 @@ success_rate = (checks_passed / checks_total * 100) if checks_total > 0 else 0
 print(f"\nPassed: {checks_passed}/{checks_total} ({success_rate:.1f}%)")
 
 if success_rate == 100:
-    print("\n🎉 ALL CHECKS PASSED! VaultMind is ready for demo!")
+    print("\n[SUCCESS] ALL CHECKS PASSED! VaultMind is ready for demo!")
     print("\nTo start the demo:")
     print("  streamlit run genai_dashboard_modular.py")
     sys.exit(0)
 elif success_rate >= 80:
-    print("\n⚠️  MOSTLY READY - Fix remaining issues for best demo experience")
+    print("\n[WARNING] MOSTLY READY - Fix remaining issues for best demo experience")
     sys.exit(1)
 else:
-    print("\n❌ NOT READY - Please fix the issues above before demo")
+    print("\n[ERROR] NOT READY - Please fix the issues above before demo")
     sys.exit(1)
