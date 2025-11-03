@@ -8,8 +8,8 @@ Enterprise-grade AI assistant for finding trusted answers across your organizati
 - How it works: Ingest + chunk + embed; hybrid retrieval (BM25 + vectors with re‑ranking); optional LLM synthesis; robust fallbacks and logging.
 
 Quick links
-- Demo repo (Streamlit, Demo Mode): https://github.com/bolajil/VaultMind-Demo- (branch `demo`)
-- Live demo URL: configure via Streamlit Community Cloud (Main file: `app.py`, Python 3.10)
+- Demo repo (Streamlit, Demo Mode)
+- Live demo URL: configure via Streamlit Community Cloud (Main file: `app.py`, Python 3.10)https://genai-knowledge-assistant-8gmzhaf3k4wduueal3u4ks.streamlit.app/
 - ICP (Ideal Customer Profile): see [docs/ICP.md](docs/ICP.md)
 - One‑pager / Deck: coming soon (docs/)
 
