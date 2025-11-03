@@ -732,6 +732,7 @@ tab_config = {
     "query": ("🔍 Query Assistant", True),  # Available to all roles
     "chat": ("💬 Chat Assistant", True),   # Available to all roles
     "agent": ("🤖 Agent Assistant", True),  # Available to all authenticated users
+    "agent_hybrid": ("🧠 Agent (Hybrid)", True),  # NEW: Hybrid agent with LangGraph
     "research": ("📚 Enhanced Research", True),  # Research tab - available to all users
     "mcp": ("📊 MCP Dashboard", True),  # Available to all authenticated users
     "multicontent": ("🌐 Multi-Content", permissions.get('can_manage_content', False)),
@@ -786,6 +787,16 @@ if available_tabs:
     if "agent" in tab_dict:
         with tab_dict["agent"]:
             render_agent_assistant(user, permissions, auth_middleware, available_indexes)
+    if "agent_hybrid" in tab_dict:
+        with tab_dict["agent_hybrid"]:
+            try:
+                from tabs.agent_assistant_hybrid import render_agent_assistant_hybrid
+                render_agent_assistant_hybrid()
+                logger.info("Hybrid Agent Assistant tab rendered successfully")
+            except Exception as e:
+                st.error(f"Error loading Hybrid Agent tab: {str(e)}")
+                logger.error(f"Failed to render Hybrid Agent tab: {str(e)}")
+                st.info("Make sure to install: pip install langgraph sentence-transformers")
     if "research" in tab_dict:
         with tab_dict["research"]:
             try:
