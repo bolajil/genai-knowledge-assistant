@@ -2,12 +2,73 @@
 import os
 import json
 from pathlib import Path
-from langchain.chains import RetrievalQA
+
+# LangChain imports with fallback for version compatibility
+try:
+    from langchain.chains import RetrievalQA
+    RETRIEVAL_QA_AVAILABLE = True
+except ImportError:
+    try:
+        from langchain_classic.chains import RetrievalQA
+        RETRIEVAL_QA_AVAILABLE = True
+    except ImportError:
+        # For newer LangChain versions, create a simple wrapper
+        RETRIEVAL_QA_AVAILABLE = False
+        print("⚠️ RetrievalQA not available, using direct retrieval approach")
+
 from langchain_openai import ChatOpenAI
 from langchain_community.vectorstores import FAISS, Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from app.utils.embeddings import get_embeddings
 from utils.simple_vector_manager import get_simple_index_path  # Import the simple path finder
+
+# Simple RetrievalQA replacement for newer LangChain versions
+class SimpleRetrievalQA:
+    """Simple replacement for RetrievalQA when not available"""
+    def __init__(self, llm, retriever):
+        self.llm = llm
+        self.retriever = retriever
+    
+    @classmethod
+    def from_chain_type(cls, llm, chain_type, retriever, return_source_documents=True):
+        return cls(llm, retriever)
+    
+    def invoke(self, query):
+        """Simple invoke that retrieves docs and generates response"""
+        try:
+            # Retrieve relevant documents
+            docs = self.retriever.get_relevant_documents(query)
+            
+            # Build context from documents
+            context = "\n\n".join([doc.page_content for doc in docs])
+            
+            # Generate response with context
+            prompt = f"""Based on the following context, answer the question.
+
+Context:
+{context}
+
+Question: {query}
+
+Answer:"""
+            
+            response = self.llm.invoke(prompt)
+            
+            # Return in RetrievalQA format
+            return {
+                "result": response.content if hasattr(response, 'content') else str(response),
+                "source_documents": docs
+            }
+        except Exception as e:
+            print(f"Error in SimpleRetrievalQA: {e}")
+            return {
+                "result": f"Error retrieving answer: {str(e)}",
+                "source_documents": []
+            }
+
+# Use the simple version if RetrievalQA is not available
+if not RETRIEVAL_QA_AVAILABLE:
+    RetrievalQA = SimpleRetrievalQA
 
 # MCP imports with fallback
 try:
