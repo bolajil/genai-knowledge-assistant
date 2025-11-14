@@ -746,7 +746,8 @@ tab_config = {
 tab_config.update({
     "multi_ingest": ("🚀 Multi-Vector Ingest", True),  # Available to all roles
     "multi_query": ("🔍 Multi-Vector Query", True),  # Available to all roles
-    "vector_health": ("📊 Vector Store Health", True)  # Available to all roles
+    "vector_health": ("📊 Vector Store Health", True),  # Available to all roles
+    "system_monitoring": ("🔍 System Monitoring", True)  # Available to all roles - monitoring is useful for everyone
 })
 
 # Filter tabs based on permissions
@@ -911,6 +912,18 @@ if available_tabs:
                         st.caption(f"Import error: {MULTI_VECTOR_IMPORT_ERROR_MESSAGE}")
                     st.caption(f"Runtime import: {_e}")
                     st.markdown("- Once configured, this dashboard will display per-store health and collection counts")
+    
+    # System Monitoring Tab
+    if "system_monitoring" in tab_dict:
+        with tab_dict["system_monitoring"]:
+            try:
+                from tabs.system_monitoring import show as render_system_monitoring
+                render_system_monitoring()
+            except Exception as e:
+                st.header("🔍 System Monitoring")
+                st.error(f"Error loading System Monitoring tab: {str(e)}")
+                logger.error(f"Failed to render System Monitoring tab: {str(e)}")
+                st.info("Make sure automation dependencies are installed: pip install -r requirements-automation.txt")
 
 else:
     st.error("No tabs available for your current role. Please contact an administrator.")
