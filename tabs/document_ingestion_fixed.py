@@ -251,11 +251,11 @@ def render_weaviate_ingestion(username):
     st.subheader("📥 Document Source")
     source_type = st.radio(
         "Select Source Type:",
-        ["PDF File", "Text File", "Website URL"],
+        ["PDF File", "Text File", "Image File", "Website URL"],
         index=0,
         horizontal=True,
         key="weaviate_ingest_source_type",
-        help="Choose the content source. 'Website URL' will scrape and index web content."
+        help="Choose the content source. 'Image File' uses OCR to extract text from images."
     )
     
     # Chunking configuration
@@ -336,8 +336,14 @@ def render_weaviate_ingestion(username):
     uploaded_file = None
     url_input = None
     
-    if source_type in ["PDF File", "Text File"]:
-        file_types = ["pdf"] if source_type == "PDF File" else ["txt", "md", "csv"]
+    if source_type in ["PDF File", "Text File", "Image File"]:
+        if source_type == "PDF File":
+            file_types = ["pdf"]
+        elif source_type == "Text File":
+            file_types = ["txt", "md", "csv"]
+        else:  # Image File
+            file_types = ["jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff"]
+        
         uploaded_file = st.file_uploader(
             f"Choose {source_type}",
             type=file_types
@@ -351,12 +357,65 @@ def render_weaviate_ingestion(username):
             
             # Extract text for preview
             preview_text = None
+            ocr_metadata = None
             try:
                 if source_type == "PDF File":
                     from utils.robust_pdf_extractor import extract_text_from_pdf_robust
                     pdf_bytes = uploaded_file.getvalue()
                     preview_text, method = extract_text_from_pdf_robust(pdf_bytes, uploaded_file.name)
                     st.info(f"📄 Extraction method: {method}")
+                
+                elif source_type == "Image File":
+                    from utils.image_text_extractor import ImageTextExtractor
+                    
+                    # Show image preview (collapsed, reduced size)
+                    image_bytes = uploaded_file.getvalue()
+                    with st.expander("🖼️ View Image Preview", expanded=False):
+                        st.image(image_bytes, caption=uploaded_file.name, width=400)
+                    
+                    # OCR extraction button
+                    if st.button("🔍 Start OCR Extraction", key="weaviate_ocr_btn", type="primary"):
+                        with st.spinner("🔍 Extracting text from image using OCR..."):
+                            extractor = ImageTextExtractor(preferred_engine="tesseract")
+                            # Sanitize filename
+                            safe_filename = uploaded_file.name.encode('ascii', 'ignore').decode('ascii')
+                            if not safe_filename:
+                                safe_filename = "image_file"
+                            preview_text, method, ocr_metadata = extractor.extract_text_from_image(image_bytes, safe_filename)
+                        
+                        # Store in session state
+                        st.session_state['weaviate_ocr_text'] = preview_text
+                        st.session_state['weaviate_ocr_metadata'] = ocr_metadata
+                        st.session_state['weaviate_ocr_method'] = method
+                        
+                        # Show OCR info
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.info(f"📸 OCR method: {method}")
+                        with col2:
+                            st.info(f"🎯 Confidence: {ocr_metadata.get('confidence', 0):.1f}%")
+                        with col3:
+                            st.info(f"📝 Words: {ocr_metadata.get('word_count', 0)}")
+                    
+                    # Retrieve from session state if available
+                    if 'weaviate_ocr_text' in st.session_state:
+                        preview_text = st.session_state['weaviate_ocr_text']
+                        ocr_metadata = st.session_state.get('weaviate_ocr_metadata', {})
+                        
+                        # Show stored OCR info
+                        if preview_text:
+                            st.success("✅ OCR extraction completed")
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.caption(f"📸 Method: {st.session_state.get('weaviate_ocr_method', 'N/A')}")
+                            with col2:
+                                st.caption(f"🎯 Confidence: {ocr_metadata.get('confidence', 0):.1f}%")
+                            with col3:
+                                st.caption(f"📝 Words: {ocr_metadata.get('word_count', 0)}")
+                    else:
+                        preview_text = None
+                        ocr_metadata = None
+                
                 else:  # Text File
                     try:
                         preview_text = uploaded_file.getvalue().decode("utf-8")
@@ -746,11 +805,11 @@ def render_faiss_ingestion(username):
     st.subheader("📥 Document Source")
     source_type = st.radio(
         "Select Source Type:",
-        ["PDF File", "Text File", "Website URL"],
+        ["PDF File", "Text File", "Image File", "Website URL"],
         index=0,
         horizontal=True,
         key="faiss_ingest_source_type",
-        help="Choose the content source. 'Website URL' will scrape and index web content."
+        help="Choose the content source. 'Image File' uses OCR to extract text from images."
     )
     
     # Chunking configuration
@@ -770,8 +829,14 @@ def render_faiss_ingestion(username):
     uploaded_file = None
     url_input = None
     
-    if source_type in ["PDF File", "Text File"]:
-        file_types = ["pdf"] if source_type == "PDF File" else ["txt", "md", "csv"]
+    if source_type in ["PDF File", "Text File", "Image File"]:
+        if source_type == "PDF File":
+            file_types = ["pdf"]
+        elif source_type == "Text File":
+            file_types = ["txt", "md", "csv"]
+        else:  # Image File
+            file_types = ["jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff"]
+        
         uploaded_file = st.file_uploader(
             f"Choose {source_type}",
             type=file_types
@@ -785,12 +850,65 @@ def render_faiss_ingestion(username):
             
             # Extract text for preview
             preview_text = None
+            ocr_metadata = None
             try:
                 if source_type == "PDF File":
                     from utils.robust_pdf_extractor import extract_text_from_pdf_robust
                     pdf_bytes = uploaded_file.getvalue()
                     preview_text, method = extract_text_from_pdf_robust(pdf_bytes, uploaded_file.name)
                     st.info(f"📄 Extraction method: {method}")
+                
+                elif source_type == "Image File":
+                    from utils.image_text_extractor import ImageTextExtractor
+                    
+                    # Show image preview (collapsed, reduced size)
+                    image_bytes = uploaded_file.getvalue()
+                    with st.expander("🖼️ View Image Preview", expanded=False):
+                        st.image(image_bytes, caption=uploaded_file.name, width=400)
+                    
+                    # OCR extraction button
+                    if st.button("🔍 Start OCR Extraction", key="faiss_ocr_btn", type="primary"):
+                        with st.spinner("🔍 Extracting text from image using OCR..."):
+                            extractor = ImageTextExtractor(preferred_engine="tesseract")
+                            # Sanitize filename
+                            safe_filename = uploaded_file.name.encode('ascii', 'ignore').decode('ascii')
+                            if not safe_filename:
+                                safe_filename = "image_file"
+                            preview_text, method, ocr_metadata = extractor.extract_text_from_image(image_bytes, safe_filename)
+                        
+                        # Store in session state
+                        st.session_state['faiss_ocr_text'] = preview_text
+                        st.session_state['faiss_ocr_metadata'] = ocr_metadata
+                        st.session_state['faiss_ocr_method'] = method
+                        
+                        # Show OCR info
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.info(f"📸 OCR method: {method}")
+                        with col2:
+                            st.info(f"🎯 Confidence: {ocr_metadata.get('confidence', 0):.1f}%")
+                        with col3:
+                            st.info(f"📝 Words: {ocr_metadata.get('word_count', 0)}")
+                    
+                    # Retrieve from session state if available
+                    if 'faiss_ocr_text' in st.session_state:
+                        preview_text = st.session_state['faiss_ocr_text']
+                        ocr_metadata = st.session_state.get('faiss_ocr_metadata', {})
+                        
+                        # Show stored OCR info
+                        if preview_text:
+                            st.success("✅ OCR extraction completed")
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.caption(f"📸 Method: {st.session_state.get('faiss_ocr_method', 'N/A')}")
+                            with col2:
+                                st.caption(f"🎯 Confidence: {ocr_metadata.get('confidence', 0):.1f}%")
+                            with col3:
+                                st.caption(f"📝 Words: {ocr_metadata.get('word_count', 0)}")
+                    else:
+                        preview_text = None
+                        ocr_metadata = None
+                
                 else:  # Text File
                     try:
                         preview_text = uploaded_file.getvalue().decode("utf-8")

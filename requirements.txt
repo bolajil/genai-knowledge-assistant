@@ -19,6 +19,12 @@ googlesearch-python
 pydantic>=2,<3
 beautifulsoup4
 
+# Image Processing and OCR
+pillow>=10.0.0
+pytesseract>=0.3.10
+easyocr>=1.7.0
+numpy>=1.24.0
+
 # LLM providers and LangChain integrations (added)
 openai>=1.30.0
 langchain-openai
