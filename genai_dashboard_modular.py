@@ -738,6 +738,7 @@ tab_config = {
     "multicontent": ("🌐 Multi-Content", permissions.get('can_manage_content', False)),
     "tool_requests": ("🛠️ Tool Requests", True),  # Available to all authenticated users
     "permissions": ("🔒 Permissions", True),  # My Access & Requests - available to all authenticated users
+    "notifications": ("📱 Notifications", True),  # Notification settings - available to all authenticated users
     "storage_settings": ("🔌 Storage Settings", permissions.get('can_manage_users', False) or WV_SETTINGS_FOR_ALL),
     "admin": ("⚙️ Admin Panel", permissions.get('can_manage_users', False))
 }
@@ -857,6 +858,16 @@ if available_tabs:
     if "permissions" in tab_dict:
         with tab_dict["permissions"]:
             render_user_permissions_tab(user_dict, permissions, auth_middleware)
+    if "notifications" in tab_dict:
+        with tab_dict["notifications"]:
+            try:
+                from tabs.notification_settings import render_notification_settings
+                render_notification_settings()
+                logger.info("Notification Settings tab rendered successfully")
+            except Exception as e:
+                st.error(f"Error loading Notification Settings tab: {str(e)}")
+                logger.error(f"Failed to render Notification Settings tab: {str(e)}")
+                st.info("Make sure notification_manager.py is configured properly")
     if "storage_settings" in tab_dict:
         with tab_dict["storage_settings"]:
             render_storage_settings(form_key_prefix="storage_settings_top")

@@ -248,6 +248,34 @@ class EnterprisePermissionManager:
                 requires_approval=True,
                 cost_tier="standard"
             ),
+            "push_notifications": Feature(
+                id="push_notifications",
+                name="Push Notifications",
+                description="Receive push notifications on mobile/desktop (Pushover, FCM, OneSignal, SMS, Telegram)",
+                category=FeatureCategory.COLLABORATION,
+                available_levels=[PermissionLevel.NONE, PermissionLevel.READ, PermissionLevel.WRITE],
+                default_level=PermissionLevel.READ,
+                cost_tier="free"
+            ),
+            "response_formatter": Feature(
+                id="response_formatter",
+                name="Enhanced Response Formatting",
+                description="Beautiful markdown formatting for all query responses with sources and metadata",
+                category=FeatureCategory.AI_SERVICES,
+                available_levels=[PermissionLevel.NONE, PermissionLevel.READ],
+                default_level=PermissionLevel.READ,
+                cost_tier="free"
+            ),
+            "llm_enhanced_formatting": Feature(
+                id="llm_enhanced_formatting",
+                name="LLM-Enhanced Formatting",
+                description="AI-powered response formatting for even better quality (uses OpenAI API)",
+                category=FeatureCategory.AI_SERVICES,
+                available_levels=[PermissionLevel.NONE, PermissionLevel.READ],
+                default_level=PermissionLevel.NONE,
+                requires_approval=True,
+                cost_tier="standard"
+            ),
             
             # Integrations
             "api_access": Feature(
@@ -299,6 +327,9 @@ class EnterprisePermissionManager:
                 "email_sending": PermissionLevel.NONE,
                 "slack_messaging": PermissionLevel.NONE,
                 "teams_messaging": PermissionLevel.NONE,
+                "push_notifications": PermissionLevel.READ,
+                "response_formatter": PermissionLevel.READ,
+                "llm_enhanced_formatting": PermissionLevel.NONE,
                 "api_access": PermissionLevel.NONE
             },
             "user": {
@@ -315,6 +346,9 @@ class EnterprisePermissionManager:
                 "email_sending": PermissionLevel.NONE,
                 "slack_messaging": PermissionLevel.NONE,
                 "teams_messaging": PermissionLevel.NONE,
+                "push_notifications": PermissionLevel.READ,
+                "response_formatter": PermissionLevel.READ,
+                "llm_enhanced_formatting": PermissionLevel.NONE,
                 "api_access": PermissionLevel.NONE
             },
             "power_user": {
@@ -331,6 +365,9 @@ class EnterprisePermissionManager:
                 "email_sending": PermissionLevel.NONE,
                 "slack_messaging": PermissionLevel.NONE,
                 "teams_messaging": PermissionLevel.NONE,
+                "push_notifications": PermissionLevel.WRITE,
+                "response_formatter": PermissionLevel.READ,
+                "llm_enhanced_formatting": PermissionLevel.READ,
                 "api_access": PermissionLevel.READ
             },
             "admin": {
@@ -341,6 +378,7 @@ class EnterprisePermissionManager:
                     "multi_source_search", "enhanced_research", "analytics_dashboard",
                     "user_management", "system_config", "audit_logs",
                     "content_sharing", "team_workspaces", "email_sending", "slack_messaging", "teams_messaging",
+                    "push_notifications", "response_formatter", "llm_enhanced_formatting",
                     "api_access", "webhook_config", "sso_integration"
                 ]}
             }
