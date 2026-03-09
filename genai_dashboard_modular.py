@@ -596,7 +596,7 @@ from tabs.storage_settings import render_storage_settings
 from utils.multi_vector_storage_manager import close_global_manager
 
 # Import enhanced chat assistant
-from tabs.chat_assistant_enhanced import render_chat_assistant
+from tabs.chat_assistant import render_chat_assistant
 ENHANCED_CHAT_AVAILABLE = True
 
 # Proactively reset the global multi-vector manager each rerun so config/code changes apply
