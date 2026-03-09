@@ -1,33 +1,39 @@
-streamlit
+# VaultMind GenAI Knowledge Assistant - Pinned Dependencies
+# Last updated: 2026-03-09
+
+# Core Framework
+streamlit==1.48.1
+streamlit-authenticator==0.2.3
 python-dotenv
 requests
+pydantic>=2.0.0,<3
+
+# Document Processing
 newspaper3k
 requests-html
-langchain
-langchain-community
-langchain-experimental
-langgraph>=0.0.20
-faiss-cpu
-pandas
-plotly>=5.17.0
-sentence-transformers
-weaviate-client[grpc]>=4.4.0,<5
-sentence-transformers
 pypdf
-duckduckgo-search
-googlesearch-python
-pydantic>=2,<3
 beautifulsoup4
-
-# Image Processing and OCR
 pillow>=10.0.0
 pytesseract>=0.3.10
 easyocr>=1.7.0
 numpy>=1.24.0
 
-# LLM providers and LangChain integrations (added)
+# LangChain Stack
+langchain==0.3.27
+langchain-community==0.3.27
+langchain-core==0.3.80
+langchain-experimental==0.3.4
+langchain-openai==0.3.35
+langchain-text-splitters==0.3.9
+langgraph==0.6.11
+
+# Vector Stores
+faiss-cpu==1.12.0
+weaviate-client[grpc]>=4.4.0,<5
+sentence-transformers==5.1.0
+
+# LLM Providers
 openai>=1.30.0
-langchain-openai
 anthropic
 langchain-anthropic
 mistralai
@@ -35,15 +41,13 @@ langchain-mistralai
 groq
 langchain-groq
 
-# Authentication and Security Dependencies
-streamlit-authenticator==0.2.3
+# Data & Visualization
+pandas
+plotly>=5.17.0
+
+# Search
+duckduckgo-search
+googlesearch-python
+
+# Authentication
 bcrypt==4.0.1
-pyotp==2.9.0
-qrcode==7.4.2
-PyJWT==2.8.0
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-python-multipart==0.0.6
-slowapi==0.1.9
-redis==5.0.1
-cryptography==41.0.7

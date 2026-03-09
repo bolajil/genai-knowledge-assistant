@@ -248,3 +248,9 @@ logs/
 mcp_logs.db
 =======
 >>>>>>> clean-master
+
+# Backup folder for archived files
+.backup/
+
+# Secrets
+.streamlit/secrets.toml

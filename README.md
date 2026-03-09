@@ -8,8 +8,10 @@
 
 **Enterprise RAG with multi-vector search, hybrid retrieval, LangGraph autonomous reasoning, and intelligent document quality control**
 
-<<<<<<< HEAD
-[🎬 Live Demo](#demo) | [📖 Documentation](#documentation) | [🚀 Quick Start](#quickstart-local) | [💡 Features](#key-features)
+[🎬 Live Demo](https://genai-knowledge-assistant-8gmzhaf3k4wduueal3u4ks.streamlit.app/) | [📖 Documentation](#documentation) | [🚀 Quick Start](#quickstart-local) | [💡 Features](#key-features)
+
+> **Live Demo:** https://genai-knowledge-assistant-8gmzhaf3k4wduueal3u4ks.streamlit.app/  
+> **Request Access:** bolafiz2001@gmail.com
 
 ---
 
@@ -32,14 +34,7 @@ VaultMind is an enterprise-grade GenAI knowledge assistant that turns scattered 
 - ✅ [Publishing Checklist](PUBLISH_CHECKLIST.md) - Go-to-market preparation
 - ⚡ [Quick Publish](QUICK_PUBLISH.md) - Deploy in 30 minutes
 - 📊 [Document Quality Guide](DOCUMENT_QUALITY_GUIDE.md) - Fix OCR and text issues
-=======
-Quick links
-- Demo repo (Streamlit, Demo Mode)
-- Live demo URL: configure via Streamlit Community Cloud (Main file: `app.py`, Python 3.10)https://genai-knowledge-assistant-8gmzhaf3k4wduueal3u4ks.streamlit.app/
-- Request a User login and Password from this email: bolafiz2001@gmail.com
-- ICP (Ideal Customer Profile): see [docs/ICP.md](docs/ICP.md)
-- One‑pager / Deck: coming soon (docs/)
->>>>>>> de525cfb8f3a30a0114d9c873e8c05ffaf697075
+- 📋 [ICP Document](docs/ICP.md) - Ideal Customer Profile
 
 ---
 
