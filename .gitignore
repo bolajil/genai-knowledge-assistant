@@ -175,82 +175,22 @@ config/*.env.bak
 *.log
 logs/
 mcp_logs.db
-<<<<<<< HEAD
-
-# ============================================================
-# API Keys and Secrets - NEVER COMMIT THESE
-# ============================================================
-
-# Streamlit secrets
-.streamlit/secrets.toml
-.streamlit/
-
-# AWS and Storage Credentials  
-config/storage.env
-config/storage.env.bak
-config/*.env
-config/*.env.bak
-
-# Environment files
-.env
-.env.local
-.env.*.local
-*.env
-*.env.bak
-
-# Backup files with potential secrets
-*.bak
-*~
-
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-
-# Logs
-*.log
-logs/
-mcp_logs.db
-
-# ============================================================
-# API Keys and Secrets - NEVER COMMIT THESE
-# ============================================================
-
-# Streamlit secrets
-.streamlit/secrets.toml
-.streamlit/
-
-# AWS and Storage Credentials  
-config/storage.env
-config/storage.env.bak
-config/*.env
-config/*.env.bak
-
-# Environment files
-.env
-.env.local
-.env.*.local
-*.env
-*.env.bak
-
-# Backup files with potential secrets
-*.bak
-*~
-
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-
-# Logs
-*.log
-logs/
-mcp_logs.db
-=======
->>>>>>> clean-master
 
 # Backup folder for archived files
 .backup/
 
-# Secrets
-.streamlit/secrets.toml
+# Archive conflict backups (cleanup remnants)
+archive_conflict_backups/
+
+# ============================================================
+# Huron Enterprise - Additional Ignores
+# ============================================================
+
+# Indexes directory (local vector stores)
+indexes/
+
+# Local database files
+*.db-journal
+
+# Huron planning folder (if contains sensitive notes)
+# Uncomment if needed: Huron VaultMind GenAI Knowledge Assistant/
