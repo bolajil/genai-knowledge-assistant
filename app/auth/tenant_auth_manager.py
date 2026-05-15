@@ -182,6 +182,76 @@ class TenantAuthManager:
             ))
         ).scalar_one_or_none()
     
+    def create_department(
+        self,
+        tenant_id: str,
+        name: str,
+        display_name: str = None,
+        description: str = None
+    ) -> Optional[Department]:
+        """
+        Create a new department within a tenant.
+        
+        Args:
+            tenant_id: Parent tenant ID
+            name: Department name (will be lowercased)
+            display_name: Human-readable name
+            description: Department description
+            
+        Returns:
+            Created Department or None if failed
+        """
+        try:
+            dept = Department(
+                tenant_id=uuid.UUID(tenant_id),
+                name=name.lower().replace(" ", "_"),
+                display_name=display_name or name.title(),
+                description=description,
+                is_active=True
+            )
+            self.session.add(dept)
+            self.session.commit()
+            
+            logger.info(f"Created department: {name} in tenant: {tenant_id}")
+            return dept
+            
+        except Exception as e:
+            self.session.rollback()
+            logger.error(f"Error creating department: {e}")
+            return None
+    
+    def ensure_department(
+        self,
+        tenant_id: str,
+        name: str,
+        display_name: str = None,
+        description: str = None
+    ) -> Optional[Department]:
+        """
+        Get department if exists, create if not.
+        
+        Args:
+            tenant_id: Parent tenant ID
+            name: Department name
+            display_name: Human-readable name (used if creating)
+            description: Description (used if creating)
+            
+        Returns:
+            Existing or newly created Department
+        """
+        # Check if exists
+        dept = self.get_department_by_name(tenant_id, name)
+        if dept:
+            return dept
+        
+        # Create new
+        return self.create_department(
+            tenant_id=tenant_id,
+            name=name,
+            display_name=display_name,
+            description=description
+        )
+    
     # ==================== User Management ====================
     
     def create_user(
