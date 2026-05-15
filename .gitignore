@@ -69,9 +69,10 @@ archive_*/
 safe_cleanup_script.py
 run_cleanup.bat
 
-# Test files (if scattered in root)
-test_*.py
-*_test.py
+# Test files (if scattered in root, not in tests/)
+/test_*.py
+/*_test.py
+!tests/
 
 # Debug files
 debug_*.py
