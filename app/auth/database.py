@@ -104,7 +104,7 @@ def init_sync_db():
     global sync_engine, SyncSessionLocal
     
     sync_engine = get_sync_engine()
-    SyncSessionLocal = sessionmaker(bind=sync_engine, autocommit=False, autoflush=False)
+    SyncSessionLocal = sessionmaker(bind=sync_engine, autocommit=False, autoflush=False, expire_on_commit=False)
     
     # Create tables if they don't exist
     Base.metadata.create_all(bind=sync_engine)

@@ -23,8 +23,19 @@ def init_session_state():
     """Initialize session state"""
     if 'auth_manager' not in st.session_state:
         st.session_state.auth_manager = get_tenant_auth_manager()
-    if 'current_tenant' not in st.session_state:
-        st.session_state.current_tenant = None
+    if 'current_tenant_data' not in st.session_state:
+        st.session_state.current_tenant_data = None  # Store as dict, not ORM object
+
+def tenant_to_dict(tenant):
+    """Convert tenant ORM object to dict to avoid detached session issues"""
+    if tenant is None:
+        return None
+    return {
+        'id': str(tenant.id),
+        'name': tenant.name,
+        'display_name': tenant.display_name,
+        'is_active': tenant.is_active
+    }
 
 def render_header():
     """Render header"""
@@ -57,7 +68,7 @@ def render_tenant_management():
                     )
                     if tenant:
                         st.success(f"✅ Created tenant: {tenant_display}")
-                        st.session_state.current_tenant = tenant
+                        st.session_state.current_tenant_data = tenant_to_dict(tenant)
                         st.rerun()
                     else:
                         st.error("Failed to create tenant (may already exist)")
@@ -71,14 +82,15 @@ def render_tenant_management():
         if st.button("🚀 Quick Setup: Create Default Tenant"):
             tenant = auth.ensure_default_tenant("default")
             if tenant:
-                st.session_state.current_tenant = tenant
-                st.success(f"✅ Default tenant ready: {tenant.display_name}")
+                tenant_data = tenant_to_dict(tenant)
+                st.session_state.current_tenant_data = tenant_data
+                st.success(f"✅ Default tenant ready: {tenant_data['display_name']}")
                 st.rerun()
         
         # Show current tenant
-        if st.session_state.current_tenant:
-            tenant = st.session_state.current_tenant
-            st.info(f"**Current Tenant:** {tenant.display_name} (`{tenant.name}`)")
+        if st.session_state.current_tenant_data:
+            tenant = st.session_state.current_tenant_data
+            st.info(f"**Current Tenant:** {tenant['display_name']} (`{tenant['name']}`)")
 
 def render_department_management():
     """Render department management section"""
@@ -86,12 +98,12 @@ def render_department_management():
     
     auth = st.session_state.auth_manager
     
-    if not st.session_state.current_tenant:
+    if not st.session_state.current_tenant_data:
         st.warning("⚠️ Please create or select a tenant first")
         return
     
-    tenant = st.session_state.current_tenant
-    tenant_id = str(tenant.id)
+    tenant = st.session_state.current_tenant_data
+    tenant_id = tenant['id']
     
     col1, col2 = st.columns([1, 2])
     
@@ -120,7 +132,7 @@ def render_department_management():
                     st.warning("Please enter a department name")
     
     with col2:
-        st.subheader(f"Departments in {tenant.display_name}")
+        st.subheader(f"Departments in {tenant['display_name']}")
         
         departments = auth.get_departments_for_tenant(tenant_id)
         
@@ -141,12 +153,12 @@ def render_user_management():
     
     auth = st.session_state.auth_manager
     
-    if not st.session_state.current_tenant:
+    if not st.session_state.current_tenant_data:
         st.warning("⚠️ Please create or select a tenant first")
         return
     
-    tenant = st.session_state.current_tenant
-    tenant_id = str(tenant.id)
+    tenant = st.session_state.current_tenant_data
+    tenant_id = tenant['id']
     
     col1, col2 = st.columns([1, 2])
     
