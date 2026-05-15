@@ -49,6 +49,10 @@ def render_tenant_management():
     
     auth = st.session_state.auth_manager
     
+    # Get all tenants for selector
+    all_tenants = auth.get_all_tenants()
+    tenant_options = {t.display_name: tenant_to_dict(t) for t in all_tenants}
+    
     col1, col2 = st.columns([1, 2])
     
     with col1:
@@ -68,7 +72,6 @@ def render_tenant_management():
                     )
                     if tenant:
                         st.success(f"✅ Created tenant: {tenant_display}")
-                        st.session_state.current_tenant_data = tenant_to_dict(tenant)
                         st.rerun()
                     else:
                         st.error("Failed to create tenant (may already exist)")
@@ -76,21 +79,41 @@ def render_tenant_management():
                     st.warning("Please fill in all fields")
     
     with col2:
-        st.subheader("Existing Tenants")
+        st.subheader("Select Active Tenant")
         
-        # Quick setup button
-        if st.button("🚀 Quick Setup: Create Default Tenant"):
-            tenant = auth.ensure_default_tenant("default")
-            if tenant:
-                tenant_data = tenant_to_dict(tenant)
-                st.session_state.current_tenant_data = tenant_data
-                st.success(f"✅ Default tenant ready: {tenant_data['display_name']}")
+        if tenant_options:
+            # Tenant selector dropdown
+            current_name = st.session_state.current_tenant_data['display_name'] if st.session_state.current_tenant_data else None
+            selected = st.selectbox(
+                "Choose tenant to manage:",
+                options=list(tenant_options.keys()),
+                index=list(tenant_options.keys()).index(current_name) if current_name in tenant_options else 0,
+                key="tenant_selector"
+            )
+            
+            if selected and (not st.session_state.current_tenant_data or 
+                           st.session_state.current_tenant_data['display_name'] != selected):
+                st.session_state.current_tenant_data = tenant_options[selected]
                 st.rerun()
-        
-        # Show current tenant
-        if st.session_state.current_tenant_data:
-            tenant = st.session_state.current_tenant_data
-            st.info(f"**Current Tenant:** {tenant['display_name']} (`{tenant['name']}`)")
+            
+            # Show current tenant info
+            if st.session_state.current_tenant_data:
+                tenant = st.session_state.current_tenant_data
+                st.success(f"**Active Tenant:** {tenant['display_name']} (`{tenant['name']}`)")
+        else:
+            st.warning("No tenants found. Create one first!")
+            
+            # Quick setup button
+            if st.button("🚀 Quick Setup: Create Huron Tenant"):
+                tenant = auth.create_tenant(
+                    name="huron",
+                    display_name="Huron Consulting",
+                    create_default_departments=True
+                )
+                if tenant:
+                    st.session_state.current_tenant_data = tenant_to_dict(tenant)
+                    st.success("✅ Huron tenant created with default departments!")
+                    st.rerun()
 
 def render_department_management():
     """Render department management section"""

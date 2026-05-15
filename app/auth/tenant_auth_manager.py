@@ -159,6 +159,15 @@ class TenantAuthManager:
             select(Tenant).where(Tenant.id == uuid.UUID(tenant_id))
         ).scalar_one_or_none()
     
+    def get_all_tenants(self) -> List[Tenant]:
+        """Get all active tenants"""
+        result = self.session.execute(
+            select(Tenant)
+            .where(Tenant.is_active == True)
+            .order_by(Tenant.display_name)
+        )
+        return list(result.scalars().all())
+    
     # ==================== Department Management ====================
     
     def get_departments_for_tenant(self, tenant_id: str) -> List[Department]:
