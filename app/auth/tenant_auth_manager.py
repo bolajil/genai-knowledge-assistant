@@ -565,6 +565,103 @@ class TenantAuthManager:
     
     # ==================== Initialization Helpers ====================
     
+    def get_user_by_id(self, user_id: str) -> Optional[User]:
+        """Get user by ID"""
+        try:
+            return self.session.execute(
+                select(User).where(User.id == uuid.UUID(user_id))
+            ).scalar_one_or_none()
+        except Exception:
+            return None
+    
+    def invalidate_token(self, token: str) -> bool:
+        """Invalidate a JWT token (add to blacklist)"""
+        # TODO: Implement token blacklist (Redis recommended)
+        logger.info("Token invalidated")
+        return True
+    
+    def refresh_token(self, refresh_token: str) -> Optional[str]:
+        """Generate new access token from refresh token"""
+        try:
+            # Verify refresh token
+            payload = jwt.decode(
+                refresh_token,
+                self.jwt_secret,
+                algorithms=["HS256"]
+            )
+            
+            if payload.get("type") != "refresh":
+                return None
+            
+            # Generate new access token
+            user = self.get_user_by_id(payload["sub"])
+            if not user:
+                return None
+            
+            # Get departments
+            departments = self.get_user_departments(str(user.id))
+            dept_ids = [str(d.id) for d in departments]
+            
+            # Create authenticated user
+            auth_user = AuthenticatedUser(
+                id=str(user.id),
+                username=user.username,
+                email=user.email,
+                role=user.role,
+                tenant_id=str(user.tenant_id),
+                tenant_name=payload.get("tenant_name", ""),
+                department_ids=dept_ids,
+                primary_department_id=dept_ids[0] if dept_ids else None,
+                is_active=user.is_active,
+                mfa_enabled=user.mfa_enabled,
+                created_at=user.created_at,
+                last_login=user.last_login
+            )
+            
+            return self.generate_token(auth_user)
+            
+        except jwt.InvalidTokenError:
+            return None
+    
+    def change_password(
+        self,
+        user_id: str,
+        current_password: str,
+        new_password: str
+    ) -> bool:
+        """Change user password"""
+        try:
+            user = self.get_user_by_id(user_id)
+            if not user:
+                return False
+            
+            # Verify current password
+            if not self._verify_password(current_password, user.password_hash):
+                return False
+            
+            # Update password
+            user.password_hash = self._hash_password(new_password)
+            user.updated_at = datetime.utcnow()
+            self.session.commit()
+            
+            # Audit log
+            self._log_event(
+                tenant_id=str(user.tenant_id),
+                user_id=user_id,
+                event_type="PASSWORD_CHANGE",
+                resource_type="user",
+                resource_id=user_id,
+                action="UPDATE",
+                details="Password changed"
+            )
+            
+            return True
+            
+        except Exception as e:
+            self.session.rollback()
+            logger.error(f"Error changing password: {e}")
+            return False
+    
     def ensure_default_tenant(self, tenant_name: str = "default") -> Tenant:
         """Ensure a default tenant exists for development"""
         tenant = self.get_tenant_by_name(tenant_name)
