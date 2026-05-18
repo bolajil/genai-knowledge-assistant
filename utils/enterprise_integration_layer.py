@@ -90,6 +90,18 @@ class EnterpriseRetrievalSystem:
             except Exception as e:
                 logger.warning(f"Caching initialization failed: {e}")
                 self.components['cache_manager'] = None
+        
+        # Initialize Advanced Reranker (Stage 4 of RAG pipeline)
+        try:
+            from utils.advanced_reranker import AdvancedReranker
+            self.components['advanced_reranker'] = AdvancedReranker(confidence_threshold=0.7)
+            logger.info("Advanced reranker initialized")
+        except Exception as e:
+            logger.warning(f"Advanced reranker initialization failed: {e}")
+            self.components['advanced_reranker'] = None
+        
+        # Load department attention profiles for reranking
+        self.dept_attention_profiles = self._load_dept_attention_profiles()
     
     def retrieve_with_enterprise_features(
         self, 
@@ -113,13 +125,23 @@ class EnterpriseRetrievalSystem:
             
             # Step 2: Use hybrid search if available
             if self.components.get('hybrid_search'):
-                results = self._try_hybrid_search(query, index_name, max_results)
+                results = self._try_hybrid_search(query, index_name, max_results * 2)  # Get more for reranking
                 if results:
                     # Step 3: Apply metadata filtering
                     if filters and self.components.get('metadata_filter'):
                         results = self._apply_metadata_filtering(results, filters)
                     
-                    # Step 4: Cache results
+                    # Step 4: Apply Advanced Reranking with dept attention weights
+                    if self.components.get('advanced_reranker'):
+                        results, rerank_metadata = self._apply_advanced_reranking(
+                            query, results, index_name, max_results
+                        )
+                        logger.info(f"Reranking: {rerank_metadata.get('filtered_count', 0)}/{rerank_metadata.get('original_count', 0)} results passed threshold")
+                    else:
+                        # Fallback: just take top results
+                        results = results[:max_results]
+                    
+                    # Step 5: Cache results
                     if use_cache and self.components.get('cache_manager'):
                         self._cache_results(query, index_name, results, filters)
                     
@@ -187,6 +209,126 @@ class EnterpriseRetrievalSystem:
         except Exception as e:
             logger.warning(f"Metadata filtering failed: {e}")
             return results
+    
+    def _load_dept_attention_profiles(self) -> Dict[str, Any]:
+        """Load department attention profiles from namespace registry"""
+        try:
+            import yaml
+            from pathlib import Path
+            
+            config_path = Path(__file__).parent.parent / "config" / "dept_namespace_registry.yml"
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+                
+                profiles = {}
+                for dept_id, dept_config in config.get('departments', {}).items():
+                    if 'attention_profile' in dept_config:
+                        profiles[dept_id] = dept_config['attention_profile']
+                
+                logger.info(f"Loaded attention profiles for {len(profiles)} departments")
+                return profiles
+            else:
+                logger.warning("Department namespace registry not found")
+                return {}
+        except Exception as e:
+            logger.warning(f"Failed to load dept attention profiles: {e}")
+            return {}
+    
+    def _apply_advanced_reranking(
+        self, 
+        query: str, 
+        results: List[Dict[str, Any]], 
+        index_name: str,
+        max_results: int
+    ) -> tuple:
+        """Apply advanced reranking with department-specific attention weights"""
+        try:
+            reranker = self.components['advanced_reranker']
+            
+            # Determine department from index name (e.g., "legal_index" -> "legal")
+            dept_id = self._extract_dept_from_index(index_name)
+            
+            # Get department-specific attention profile
+            attention_profile = self.dept_attention_profiles.get(dept_id, {
+                'recency_weight': 0.75,
+                'authority_boost': 1.0,
+                'confidence_threshold': 0.7
+            })
+            
+            # Apply reranking with confidence threshold
+            threshold = attention_profile.get('confidence_threshold', 0.7)
+            ranked_results, metadata = reranker.rerank_with_confidence_threshold(
+                query, results, threshold
+            )
+            
+            # Apply department attention weights to scores
+            weighted_results = []
+            recency_weight = attention_profile.get('recency_weight', 0.75)
+            authority_boost = attention_profile.get('authority_boost', 1.0)
+            
+            for result in ranked_results[:max_results]:
+                # Convert RankedResult to dict format
+                result_dict = {
+                    'content': result.content,
+                    'source': result.source,
+                    'page': result.page,
+                    'section': result.section,
+                    'metadata': {
+                        'confidence_score': result.confidence_score * authority_boost,
+                        'semantic_score': result.semantic_score,
+                        'keyword_score': result.keyword_score,
+                        'rerank_score': result.rerank_score,
+                        'dept_id': dept_id,
+                        'attention_weighted': True,
+                        **(result.metadata or {})
+                    }
+                }
+                weighted_results.append(result_dict)
+            
+            # Add reranking metadata
+            metadata['dept_id'] = dept_id
+            metadata['attention_profile_used'] = attention_profile
+            metadata['filtered_count'] = len(weighted_results)
+            metadata['original_count'] = len(results)
+            
+            return weighted_results, metadata
+            
+        except Exception as e:
+            logger.error(f"Advanced reranking failed: {e}")
+            # Fallback: return original results with basic metadata
+            return results[:max_results], {'error': str(e), 'filtered_count': len(results[:max_results]), 'original_count': len(results)}
+    
+    def _extract_dept_from_index(self, index_name: str) -> str:
+        """Extract department ID from index name"""
+        # Common patterns: "legal_index", "hr_docs", "finance", "clinical_protocols"
+        index_lower = index_name.lower()
+        
+        dept_keywords = {
+            'legal': 'legal',
+            'law': 'legal',
+            'contract': 'legal',
+            'bylaw': 'legal',
+            'hr': 'hr',
+            'human_resource': 'hr',
+            'employee': 'hr',
+            'finance': 'finance',
+            'budget': 'finance',
+            'clinical': 'clinical',
+            'medical': 'clinical',
+            'hipaa': 'clinical',
+            'operations': 'operations',
+            'ops': 'operations',
+            'it': 'it',
+            'tech': 'it',
+            'marketing': 'marketing'
+        }
+        
+        for keyword, dept in dept_keywords.items():
+            if keyword in index_lower:
+                return dept
+        
+        return 'general'
     
     def _cache_results(self, query: str, index_name: str, results: List[Dict[str, Any]], filters: Optional[Dict[str, Any]]):
         """Cache the results"""
