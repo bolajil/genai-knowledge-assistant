@@ -190,14 +190,20 @@ def execute_agent(user_prompt: str, context: ModelContext, index_name: str,
         dept_id: Department ID for namespace isolation (from JWT)
         tenant_id: Tenant ID for multi-tenant support (default: huron)
     """
-    # Initialize LangSmith tracing
+    # Initialize unified tracing (LangSmith + Langfuse)
     trace_context = None
+    tracer = None
     try:
-        from utils.langsmith_tracing import get_langsmith_tracer
-        tracer = get_langsmith_tracer()
-        trace_context = tracer.trace_query(user_prompt, dept_id or "general", tenant_id)
+        from utils.unified_tracing import get_unified_tracer
+        tracer = get_unified_tracer()
+        trace_context = tracer.start_trace(
+            name="RAG Query",
+            query=user_prompt,
+            dept_id=dept_id or "general",
+            tenant_id=tenant_id
+        )
     except Exception as trace_err:
-        print(f"LangSmith tracing init skipped: {trace_err}")
+        print(f"Unified tracing init skipped: {trace_err}")
     
     # Stage 1: Query Intent Classification
     query_intent = None
