@@ -179,18 +179,60 @@ def get_chat_chain(context: ModelContext, retriever):
         # Return the LLM directly for general knowledge tasks
         return llm
 
-def execute_agent(user_prompt: str, context: ModelContext, index_name: str) -> dict:
-    """Execute the agent with enterprise-enhanced retrieval and structured output."""
+def execute_agent(user_prompt: str, context: ModelContext, index_name: str, 
+                   dept_id: str = None, tenant_id: str = "huron") -> dict:
+    """Execute the agent with enterprise-enhanced retrieval, intent classification, and structured output.
+    
+    Args:
+        user_prompt: The user's query
+        context: Model context for LLM configuration
+        index_name: Name of the vector index to search
+        dept_id: Department ID for namespace isolation (from JWT)
+        tenant_id: Tenant ID for multi-tenant support (default: huron)
+    """
+    # Stage 1: Query Intent Classification
+    query_intent = None
+    intent_confidence = 0.0
+    try:
+        from utils.ml_models.query_intent_classifier import QueryIntentClassifier
+        from utils.ml_models.simple_intent_classifier import SimpleIntentClassifier
+        
+        # Try TensorFlow classifier first, fallback to simple
+        try:
+            classifier = QueryIntentClassifier()
+            intent_result = classifier.classify_intent(user_prompt)
+            query_intent = intent_result['intent']
+            intent_confidence = intent_result['confidence']
+            print(f"🎯 Query Intent: {query_intent} (confidence: {intent_confidence:.2f})")
+        except Exception as tf_err:
+            print(f"TF classifier unavailable, using simple: {tf_err}")
+            classifier = SimpleIntentClassifier()
+            intent_result = classifier.classify(user_prompt)
+            query_intent = intent_result['intent']
+            intent_confidence = intent_result['confidence']
+            print(f"🎯 Query Intent (simple): {query_intent} (confidence: {intent_confidence:.2f})")
+    except Exception as intent_err:
+        print(f"Intent classification skipped: {intent_err}")
+        query_intent = "general"
+        intent_confidence = 0.5
+    
     try:
         if index_name == "General Knowledge":
             # General Knowledge Task
             print("Executing General Knowledge Task")
             llm = get_chat_chain(context, retriever=None)
             response = llm.invoke(user_prompt)
-            return {"result": response.content, "source_documents": []}
+            return {
+                "result": response.content, 
+                "source_documents": [],
+                "query_intent": query_intent,
+                "intent_confidence": intent_confidence
+            }
         else:
-            # Enterprise Document-based Task
+            # Enterprise Document-based Task with namespace isolation
             print(f"Executing Enterprise Document Task on index: {index_name}")
+            if dept_id:
+                print(f"🔒 Namespace: {dept_id} (tenant: {tenant_id})")
             
             # Try enterprise integration first
             try:
@@ -270,7 +312,11 @@ Please provide a detailed, accurate response based solely on the document conten
                         "enterprise_features_used": enterprise_result.get('enterprise_features_used', []),
                         "retrieval_method": "enterprise_hybrid",
                         "confidence_score": avg_confidence,
-                        "feedback_ready": True  # Flag to indicate feedback can be collected
+                        "feedback_ready": True,  # Flag to indicate feedback can be collected
+                        "query_intent": query_intent,
+                        "intent_confidence": intent_confidence,
+                        "dept_id": dept_id,
+                        "tenant_id": tenant_id
                     }
                     
             except Exception as e:
@@ -308,7 +354,9 @@ Please provide a detailed, accurate response based solely on the document conten
                         return {
                             "result": result_text,
                             "source_documents": src_docs,
-                            "retrieval_method": "faiss_or_text_retriever"
+                            "retrieval_method": "faiss_or_text_retriever",
+                            "query_intent": query_intent,
+                            "intent_confidence": intent_confidence
                         }
                 except Exception as _qa_err:
                     # If retriever path fails, continue to real-time fallback below
@@ -372,12 +420,19 @@ Please provide a detailed, accurate response based solely on the document conten
             return {
                 "result": response.content,
                 "source_documents": source_docs,
-                "verification_status": verification['status']
+                "verification_status": verification['status'],
+                "retrieval_method": "real_time",
+                "query_intent": query_intent,
+                "intent_confidence": intent_confidence
             }
     
     except Exception as e:
         print(f"Agent execution failed: {e}")
-        return {"error": str(e)}
+        return {
+            "error": str(e),
+            "query_intent": query_intent if 'query_intent' in dir() else "unknown",
+            "intent_confidence": intent_confidence if 'intent_confidence' in dir() else 0.0
+        }
 
 def get_vector_store(index_name):
     """Get vector store for the specified index"""
