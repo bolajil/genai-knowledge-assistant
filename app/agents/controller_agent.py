@@ -321,6 +321,26 @@ Please provide a detailed, accurate response based solely on the document conten
                         if confidence_scores:
                             avg_confidence = sum(confidence_scores) / len(confidence_scores)
                     
+                    # Stage 7: Faithfulness Validation
+                    faithfulness_result = None
+                    try:
+                        from utils.faithfulness_validator import validate_response
+                        contexts = [doc.get('content', '') for doc in source_docs if doc.get('content')]
+                        faithfulness_result = validate_response(
+                            question=user_prompt,
+                            answer=response.content,
+                            contexts=contexts
+                        )
+                        print(f"📊 Faithfulness: {faithfulness_result.get('faithfulness', 0):.2f} | Overall: {faithfulness_result.get('overall', 0):.2f}")
+                        
+                        # Log to unified tracer
+                        if tracer and trace_context:
+                            tracer.add_score(trace_context, "faithfulness", faithfulness_result.get('faithfulness', 0))
+                            tracer.add_score(trace_context, "relevancy", faithfulness_result.get('relevancy', 0))
+                            tracer.end_trace(trace_context, {"result": response.content[:500]}, faithfulness_result)
+                    except Exception as faith_err:
+                        print(f"Faithfulness validation skipped: {faith_err}")
+                    
                     return {
                         "result": response.content,
                         "source_documents": source_docs,
@@ -331,7 +351,8 @@ Please provide a detailed, accurate response based solely on the document conten
                         "query_intent": query_intent,
                         "intent_confidence": intent_confidence,
                         "dept_id": dept_id,
-                        "tenant_id": tenant_id
+                        "tenant_id": tenant_id,
+                        "faithfulness": faithfulness_result
                     }
                     
             except Exception as e:

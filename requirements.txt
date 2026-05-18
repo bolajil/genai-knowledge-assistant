@@ -63,3 +63,7 @@ psycopg2-binary>=2.9.9   # PostgreSQL sync driver
 # Observability & Tracing
 langsmith>=0.1.0         # LangChain's tracing platform
 langfuse>=2.0.0          # Open-source LLM observability
+
+# RAG Evaluation & Quality
+ragas>=0.1.0             # RAG evaluation metrics (faithfulness, relevancy)
+datasets>=2.14.0         # Hugging Face datasets for Ragas
