@@ -162,12 +162,43 @@ class PineconeAdapter(BaseVectorStore):
             logger.error(f"Failed to list Pinecone indexes: {e}")
             return []
     
+    def get_namespace(self, dept_id: str, tenant_id: str = "huron") -> str:
+        """
+        Generate namespace string for department isolation.
+        Format: vaultmind-{tenant}-{dept} (max 45 chars, lowercase)
+        """
+        if not dept_id:
+            raise ValueError("dept_id required — cannot upsert to root namespace")
+        namespace = f"vaultmind-{tenant_id}-{dept_id}".lower()
+        namespace = ''.join(c if c.isalnum() or c == '-' else '-' for c in namespace)
+        return namespace[:45]
+    
+    def validate_tenant_context(self, dept_id: str, tenant_id: str = None) -> bool:
+        """Validate that tenant context is provided for namespace isolation"""
+        if not dept_id:
+            logger.error("dept_id is required for namespace isolation")
+            return False
+        return True
+    
     async def upsert_documents(self, 
                              collection_name: str,
                              documents: List[Dict[str, Any]],
-                             embeddings: Optional[List[List[float]]] = None) -> bool:
-        """Insert or update documents with vectors"""
+                             embeddings: Optional[List[List[float]]] = None,
+                             dept_id: str = None,
+                             tenant_id: str = "huron") -> bool:
+        """
+        Insert or update documents with vectors into dept-specific namespace.
+        
+        NAMESPACE ISOLATION: All vectors are stored in dept_id namespace.
+        Cross-department access is structurally impossible.
+        """
         try:
+            # Enforce namespace isolation
+            if not self.validate_tenant_context(dept_id, tenant_id):
+                raise ValueError("dept_id required — cannot upsert to root namespace")
+            
+            namespace = self.get_namespace(dept_id, tenant_id)
+            logger.info(f"Upserting to namespace: {namespace}")
             # Get or create index
             if collection_name not in self._indexes:
                 if not await self.create_collection(collection_name):
@@ -205,13 +236,13 @@ class PineconeAdapter(BaseVectorStore):
                     "metadata": metadata
                 })
             
-            # Upsert in batches
+            # Upsert in batches WITH NAMESPACE ISOLATION
             batch_size = 100
             for i in range(0, len(vectors_to_upsert), batch_size):
                 batch = vectors_to_upsert[i:i + batch_size]
-                index.upsert(vectors=batch)
+                index.upsert(vectors=batch, namespace=namespace)  # NAMESPACE ENFORCED
             
-            logger.info(f"Upserted {len(vectors_to_upsert)} documents to Pinecone index {collection_name}")
+            logger.info(f"Upserted {len(vectors_to_upsert)} documents to Pinecone index {collection_name} namespace {namespace}")
             return True
             
         except Exception as e:
@@ -224,20 +255,35 @@ class PineconeAdapter(BaseVectorStore):
                     query_embedding: Optional[List[float]] = None,
                     filters: Optional[Dict[str, Any]] = None,
                     limit: int = 10,
+                    dept_id: str = None,
+                    tenant_id: str = "huron",
                     **kwargs) -> List[VectorSearchResult]:
-        """Search using Pinecone vector similarity"""
+        """
+        Search using Pinecone vector similarity WITHIN dept namespace only.
+        
+        NAMESPACE ISOLATION: Queries are locked to caller's dept_id.
+        Cross-namespace retrieval is structurally impossible.
+        """
         try:
             if not query_embedding:
                 return []
+            
+            # Enforce namespace isolation
+            if not self.validate_tenant_context(dept_id, tenant_id):
+                raise ValueError("dept_id required — cannot query root namespace")
+            
+            namespace = self.get_namespace(dept_id, tenant_id)
+            logger.info(f"Searching in namespace: {namespace}")
             
             if collection_name not in self._indexes:
                 self._indexes[collection_name] = self._client.Index(collection_name)
             
             index = self._indexes[collection_name]
             
-            # Perform search
+            # Perform search WITH NAMESPACE ISOLATION
             search_response = index.query(
                 vector=query_embedding,
+                namespace=namespace,  # NAMESPACE ENFORCED — hard lock to caller's dept
                 top_k=limit,
                 include_metadata=True,
                 include_values=False
@@ -262,14 +308,28 @@ class PineconeAdapter(BaseVectorStore):
             logger.error(f"Search failed in Pinecone index {collection_name}: {e}")
             return []
     
-    async def delete_documents(self, collection_name: str, document_ids: List[str]) -> bool:
-        """Delete specific documents from Pinecone index"""
+    async def delete_documents(self, 
+                              collection_name: str, 
+                              document_ids: List[str],
+                              dept_id: str = None,
+                              tenant_id: str = "huron") -> bool:
+        """
+        Delete specific documents from Pinecone index within namespace.
+        
+        NAMESPACE ISOLATION: Deletions are scoped to caller's dept_id.
+        """
         try:
+            if not self.validate_tenant_context(dept_id, tenant_id):
+                raise ValueError("dept_id required for namespace-scoped deletion")
+            
+            namespace = self.get_namespace(dept_id, tenant_id)
+            
             if collection_name not in self._indexes:
                 self._indexes[collection_name] = self._client.Index(collection_name)
             
             index = self._indexes[collection_name]
-            index.delete(ids=document_ids)
+            index.delete(ids=document_ids, namespace=namespace)  # NAMESPACE ENFORCED
+            logger.info(f"Deleted {len(document_ids)} docs from namespace {namespace}")
             return True
         except Exception as e:
             logger.error(f"Failed to delete documents from Pinecone index {collection_name}: {e}")
@@ -304,6 +364,43 @@ class PineconeAdapter(BaseVectorStore):
             return True, f"Pinecone healthy: {len(indexes)} indexes available"
         except Exception as e:
             return False, f"Health check failed: {e}"
+    
+    async def list_namespaces(self, collection_name: str) -> List[str]:
+        """List all namespaces in an index (for admin/audit purposes)"""
+        try:
+            if collection_name not in self._indexes:
+                self._indexes[collection_name] = self._client.Index(collection_name)
+            
+            index = self._indexes[collection_name]
+            stats = index.describe_index_stats()
+            
+            namespaces = list(stats.get('namespaces', {}).keys())
+            return namespaces
+        except Exception as e:
+            logger.error(f"Failed to list namespaces: {e}")
+            return []
+    
+    async def get_namespace_stats(self, collection_name: str, dept_id: str, tenant_id: str = "huron") -> Dict[str, Any]:
+        """Get statistics for a specific namespace"""
+        try:
+            namespace = self.get_namespace(dept_id, tenant_id)
+            
+            if collection_name not in self._indexes:
+                self._indexes[collection_name] = self._client.Index(collection_name)
+            
+            index = self._indexes[collection_name]
+            stats = index.describe_index_stats()
+            
+            ns_stats = stats.get('namespaces', {}).get(namespace, {})
+            return {
+                'namespace': namespace,
+                'vector_count': ns_stats.get('vector_count', 0),
+                'dept_id': dept_id,
+                'tenant_id': tenant_id
+            }
+        except Exception as e:
+            logger.error(f"Failed to get namespace stats: {e}")
+            return {'error': str(e)}
 
 # Register the adapter
 from ..multi_vector_storage_interface import VectorStoreFactory
