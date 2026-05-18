@@ -1,0 +1,345 @@
+# Department Namespace Registry for VaultMind Enterprise RAG
+# This is the single source of truth for department configurations
+# 
+# Each department has:
+# - namespace: Pinecone namespace for vector isolation
+# - attention_profile: Reranking weights and thresholds
+# - web_profile: Allowed domains for web search
+# - document_types: Allowed document classifications
+# - clearance_levels: Required clearance for access
+
+departments:
+  legal:
+    namespace: legal
+    display_name: "Legal Department"
+    description: "Contracts, compliance, regulatory filings"
+    classification: restricted
+    dedicated_nodes: true
+    
+    attention_profile:
+      recency_weight: 0.90
+      authority_boost: 1.40
+      confidence_threshold: 0.80
+    
+    web_profile:
+      allowed_domains:
+        - law.cornell.edu
+        - regulations.gov
+        - ecfr.gov
+        - supremecourt.gov
+        - uscourts.gov
+        - sec.gov
+        - ftc.gov
+        - dol.gov
+        - justia.com
+        - findlaw.com
+      blocked_domains:
+        - wikipedia.org
+        - reddit.com
+      seed_queries:
+        - "regulatory compliance updates"
+        - "legal precedent recent"
+      crawl_frequency: daily
+      priority_boost: 1.3
+    
+    document_types:
+      - contracts
+      - compliance_docs
+      - regulatory_filings
+      - legal_opinions
+      - court_filings
+
+  clinical:
+    namespace: clinical
+    display_name: "Clinical Department"
+    description: "Protocols, FHIR data, clinical guidelines"
+    classification: hipaa_phi
+    dedicated_nodes: true
+    requires_baa: true
+    
+    attention_profile:
+      recency_weight: 0.95
+      authority_boost: 1.50
+      confidence_threshold: 0.85
+    
+    web_profile:
+      allowed_domains:
+        - fda.gov
+        - cms.gov
+        - cdc.gov
+        - nih.gov
+        - pubmed.ncbi.nlm.nih.gov
+        - clinicaltrials.gov
+        - who.int
+        - nejm.org
+        - mayoclinic.org
+      blocked_domains:
+        - wikipedia.org
+        - webmd.com
+      seed_queries:
+        - "FDA clinical guidelines"
+        - "CMS regulatory updates"
+      crawl_frequency: daily
+      priority_boost: 1.5
+      hipaa_filter: true
+    
+    document_types:
+      - clinical_protocols
+      - fhir_data
+      - clinical_guidelines
+      - drug_information
+      - patient_education
+
+  finance:
+    namespace: finance
+    display_name: "Finance Department"
+    description: "Budgets, reports, forecasts, audit docs"
+    classification: restricted
+    dedicated_nodes: true
+    
+    attention_profile:
+      recency_weight: 0.85
+      authority_boost: 1.30
+      confidence_threshold: 0.75
+    
+    web_profile:
+      allowed_domains:
+        - sec.gov
+        - irs.gov
+        - treasury.gov
+        - federalreserve.gov
+        - investor.gov
+        - finra.org
+        - fasb.org
+        - gasb.org
+        - bloomberg.com
+        - reuters.com
+      blocked_domains:
+        - wikipedia.org
+        - investopedia.com
+      seed_queries:
+        - "SEC filings updates"
+        - "FASB accounting standards"
+      crawl_frequency: daily
+      priority_boost: 1.2
+    
+    document_types:
+      - financial_reports
+      - budgets
+      - forecasts
+      - audit_reports
+      - tax_documents
+
+  hr:
+    namespace: hr
+    display_name: "Human Resources"
+    description: "Policies, benefits, org charts, handbooks"
+    classification: confidential
+    dedicated_nodes: false
+    
+    attention_profile:
+      recency_weight: 0.70
+      authority_boost: 1.00
+      confidence_threshold: 0.70
+    
+    web_profile:
+      allowed_domains:
+        - dol.gov
+        - eeoc.gov
+        - osha.gov
+        - ssa.gov
+        - shrm.org
+        - hr.com
+        - bls.gov
+        - healthcare.gov
+      blocked_domains:
+        - wikipedia.org
+      seed_queries:
+        - "HR compliance updates"
+        - "employment law changes"
+      crawl_frequency: weekly
+      priority_boost: 1.0
+    
+    document_types:
+      - policies
+      - benefits_info
+      - org_charts
+      - employee_handbook
+      - job_descriptions
+
+  operations:
+    namespace: operations
+    display_name: "Operations"
+    description: "SOPs, runbooks, workflows, project docs"
+    classification: internal
+    dedicated_nodes: false
+    
+    attention_profile:
+      recency_weight: 0.75
+      authority_boost: 1.10
+      confidence_threshold: 0.70
+    
+    web_profile:
+      allowed_domains:
+        - iso.org
+        - asq.org
+        - bsigroup.com
+        - pmi.org
+        - lean.org
+        - osha.gov
+        - epa.gov
+      blocked_domains:
+        - wikipedia.org
+      seed_queries:
+        - "operational excellence standards"
+        - "compliance frameworks"
+      crawl_frequency: weekly
+      priority_boost: 1.0
+    
+    document_types:
+      - sops
+      - runbooks
+      - workflows
+      - project_docs
+      - process_maps
+
+  it:
+    namespace: it
+    display_name: "IT & Engineering"
+    description: "Architecture docs, runbooks, security policies"
+    classification: confidential
+    dedicated_nodes: false
+    
+    attention_profile:
+      recency_weight: 0.80
+      authority_boost: 1.20
+      confidence_threshold: 0.72
+    
+    web_profile:
+      allowed_domains:
+        - nist.gov
+        - cisa.gov
+        - nvd.nist.gov
+        - docs.microsoft.com
+        - cloud.google.com
+        - aws.amazon.com
+        - kubernetes.io
+        - owasp.org
+        - github.com
+      blocked_domains:
+        - w3schools.com
+      seed_queries:
+        - "CVE security advisory"
+        - "cloud security best practices"
+      crawl_frequency: daily
+      priority_boost: 1.1
+    
+    document_types:
+      - architecture_docs
+      - technical_runbooks
+      - security_policies
+      - api_documentation
+      - infrastructure_configs
+
+  marketing:
+    namespace: marketing
+    display_name: "Marketing"
+    description: "Campaigns, brand guidelines, collateral"
+    classification: general
+    dedicated_nodes: false
+    
+    attention_profile:
+      recency_weight: 0.60
+      authority_boost: 0.90
+      confidence_threshold: 0.65
+    
+    web_profile:
+      allowed_domains:
+        - marketingweek.com
+        - adage.com
+        - hubspot.com
+        - contentmarketinginstitute.com
+        - searchenginejournal.com
+        - statista.com
+        - emarketer.com
+      blocked_domains: []
+      seed_queries:
+        - "marketing trends"
+        - "industry analysis"
+      crawl_frequency: weekly
+      priority_boost: 0.9
+    
+    document_types:
+      - campaigns
+      - brand_guidelines
+      - collateral
+      - market_research
+      - competitor_analysis
+
+  external:
+    namespace: external
+    display_name: "External Sources"
+    description: "Regulatory feeds, industry news, crawled content"
+    classification: public
+    dedicated_nodes: false
+    ttl_days: 90
+    
+    attention_profile:
+      recency_weight: 0.95
+      authority_boost: 0.80
+      confidence_threshold: 0.60
+    
+    web_profile:
+      allowed_domains: []  # No restrictions for external
+      blocked_domains:
+        - wikipedia.org
+      seed_queries: []
+      crawl_frequency: daily
+      priority_boost: 0.8
+    
+    document_types:
+      - news_articles
+      - industry_reports
+      - regulatory_feeds
+      - market_data
+
+# Clearance levels for cross-department access
+clearance_levels:
+  viewer:
+    description: "Read-only access to own department"
+    cross_dept_access: false
+  
+  analyst:
+    description: "Read access to own + related departments"
+    cross_dept_access: limited
+    allowed_cross_depts:
+      - operations
+      - external
+  
+  manager:
+    description: "Full access to own department, read to related"
+    cross_dept_access: limited
+  
+  director:
+    description: "Full access to multiple departments"
+    cross_dept_access: true
+  
+  admin:
+    description: "Full access to all departments"
+    cross_dept_access: true
+    can_provision_namespaces: true
+
+# Index configuration
+index_config:
+  name: huron-enterprise-knowledge
+  type: serverless
+  cloud: aws
+  region: us-east-1
+  dimension: 1536
+  metric: cosine
+  
+# Encryption settings
+encryption:
+  enabled: true
+  method: aws_kms
+  per_namespace_keys: true
